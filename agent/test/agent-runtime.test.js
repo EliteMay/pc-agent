@@ -107,6 +107,7 @@ test("runtime rejects a tool version mismatch before journaling", async () => {
       version: "2",
       capability: "system.inspect",
       risk: "low",
+      confirmation: "none",
       execute: async () => ({ ok: true })
     });
 
