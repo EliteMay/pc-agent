@@ -4,6 +4,7 @@ import { registerReadOnlyTools } from "../tools/read-only-tools.js";
 import { OperationJournal } from "../journal/operation-journal.js";
 import { SupabaseQueueClient } from "../cloud/supabase-queue-client.js";
 import { runQueueOnce } from "../queue/run-queue-once.js";
+import { LocalApprovalBroker } from "../approval/local-approval-broker.js";
 import {
   createInitialHealth,
   markPollFailure,
@@ -28,6 +29,7 @@ export async function runAgentHost(config) {
   });
 
   const journal = new OperationJournal(config.journalPath);
+  const approvalBroker = new LocalApprovalBroker();
   const client = new SupabaseQueueClient({
     endpointUrl: config.endpointUrl,
     deviceToken: config.deviceToken,
@@ -50,6 +52,9 @@ export async function runAgentHost(config) {
   const pipe = createNamedPipeServer({
     pipeName: config.pipeName,
     getHealth: () => health,
+    getPendingApproval: () => approvalBroker.getPendingApproval(),
+    onApprovalResponse: (operationId, decision) =>
+      approvalBroker.respond(operationId, decision),
     onPrepareShutdown: requestStop
   });
 
@@ -102,6 +107,7 @@ export async function runAgentHost(config) {
     }
   } finally {
     health = markStopping(health);
+    approvalBroker.cancelPending();
     await pipe.close().catch(() => undefined);
     journal.close();
     log("agent_stopped");
