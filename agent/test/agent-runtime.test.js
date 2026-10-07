@@ -107,6 +107,7 @@ test("runtime rejects a tool version mismatch before journaling", async () => {
       version: "2",
       capability: "system.inspect",
       risk: "low",
+      confirmation: "none",
       execute: async () => ({ ok: true })
     });
 
@@ -124,6 +125,136 @@ test("runtime rejects a tool version mismatch before journaling", async () => {
       (error) => error?.code === "TOOL_VERSION_MISMATCH"
     );
 
+    assert.equal(journal.getOperation("op-read-1"), null);
+  } finally {
+    journal.close();
+  }
+});
+
+
+test("confirmation-required tool fails closed without a local approval provider", async () => {
+  const registry = new ToolRegistry();
+  const journal = new OperationJournal(":memory:");
+  let executions = 0;
+
+  registry.register({
+    name: "mutation_probe",
+    version: "1",
+    capability: "mutation.test",
+    risk: "medium",
+    confirmation: "required",
+    approvalSummary: () => ({ target: "sample" }),
+    execute: async () => {
+      executions += 1;
+      return { ok: true };
+    }
+  });
+
+  try {
+    await assert.rejects(
+      executeRegisteredCommand({
+        registry,
+        journal,
+        command: command({
+          tool: "mutation_probe",
+          args: {}
+        }),
+        now: new Date("2026-10-07T01:00:00.000Z")
+      }),
+      (error) => error?.code === "LOCAL_APPROVAL_REQUIRED"
+    );
+
+    assert.equal(executions, 0);
+    assert.equal(journal.getOperation("op-read-1"), null);
+  } finally {
+    journal.close();
+  }
+});
+
+test("confirmation-required tool executes only after explicit local approval", async () => {
+  const registry = new ToolRegistry();
+  const journal = new OperationJournal(":memory:");
+  let executions = 0;
+  let approvals = 0;
+
+  registry.register({
+    name: "mutation_probe",
+    version: "1",
+    capability: "mutation.test",
+    risk: "medium",
+    confirmation: "required",
+    approvalSummary: () => ({ target: "sample" }),
+    execute: async () => {
+      executions += 1;
+      return { ok: true };
+    }
+  });
+
+  try {
+    const result = await executeRegisteredCommand({
+      registry,
+      journal,
+      command: command({
+        tool: "mutation_probe",
+        args: {}
+      }),
+      approvalProvider: {
+        async requestApproval(request) {
+          approvals += 1;
+          assert.equal(request.operation_id, "op-read-1");
+          assert.equal(request.tool, "mutation_probe");
+          return "approved";
+        }
+      },
+      now: new Date("2026-10-07T01:00:00.000Z")
+    });
+
+    assert.equal(result.executed, true);
+    assert.equal(executions, 1);
+    assert.equal(approvals, 1);
+  } finally {
+    journal.close();
+  }
+});
+
+test("denied local approval prevents execution and journaling", async () => {
+  const registry = new ToolRegistry();
+  const journal = new OperationJournal(":memory:");
+  let executions = 0;
+
+  registry.register({
+    name: "mutation_probe",
+    version: "1",
+    capability: "mutation.test",
+    risk: "medium",
+    confirmation: "required",
+    approvalSummary: () => ({ target: "sample" }),
+    execute: async () => {
+      executions += 1;
+      return { ok: true };
+    }
+  });
+
+  try {
+    await assert.rejects(
+      executeRegisteredCommand({
+        registry,
+        journal,
+        command: command({
+          tool: "mutation_probe",
+          args: {}
+        }),
+        approvalProvider: {
+          async requestApproval() {
+            return "denied";
+          }
+        },
+        now: new Date("2026-10-07T01:00:00.000Z")
+      }),
+      (error) => error?.code === "LOCAL_APPROVAL_DENIED"
+    );
+
+    assert.equal(executions, 0);
     assert.equal(journal.getOperation("op-read-1"), null);
   } finally {
     journal.close();
