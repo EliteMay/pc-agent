@@ -68,6 +68,7 @@ The first production slice is the Agent safety foundation:
 - bounded v0.7 task orchestration in the OAuth gateway: task budgets, observe/act/verify phases, per-step trace metadata, retry caps, repeated-failure blocking, and verify-before-success completion
 - v0.8 repository-repair verification: non-zero development exits fail the operation, Git inspection is phase-aware, tests can be used as Verify steps with local approval, and successful step results are represented by SHA-256 evidence fingerprints
 - v0.8.1 read_text_file range contract: Agent supports gateway-advertised offset/maxBytes with next_offset/eof pagination metadata
+- v0.8.2 legacy retirement: ping is a first-class Agent Tool Registry operation on the v1 queue, so OAuth no longer needs the legacy queued/claimed transport
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
