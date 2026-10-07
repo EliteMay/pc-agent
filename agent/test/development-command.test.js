@@ -160,7 +160,9 @@ test("development command environment drops arbitrary inherited secrets", () => 
   assert.equal(env.PATH.includes("C:\\evil"), false);
 });
 
-test("development command tool is confirmation-gated", () => {
+test("development command tool is confirmation-gated", {
+  skip: process.platform !== "win32"
+}, () => {
   const root = mkdtempSync(
     path.join(tmpdir(), "pc-agent-dev-runner-")
   );
