@@ -720,6 +720,14 @@ All existing read-only tools should work through the new registry before write s
 - require final Verify evidence before task success
 - validate the flow on a real repository: inspect -> edit -> test -> verify
 
+### v0.8.2 — Legacy Worker Retirement
+
+- register ping as a normal low-risk Agent Tool Registry operation
+- route OAuth ping through agent_queued / agent_claimed
+- remove the OAuth runtime dependency on the legacy queue worker
+- stop and disable the old standalone kaito-device-agent worker only after v1 ping passes end-to-end
+- verify device heartbeat remains on the current Agent version after legacy shutdown
+
 ### Later
 
 - richer completion-evidence policies
