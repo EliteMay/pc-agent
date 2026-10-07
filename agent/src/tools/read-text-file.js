@@ -9,19 +9,19 @@ import { resolveExistingPathWithinAllowedRoots } from "../security/path-policy.j
 import {
   ReadOnlyToolError,
   assertNonSensitivePath,
-  requirePathArg,
+  requireObjectArgs,
   requirePositiveInteger,
   requireWindows
 } from "./read-only-common.js";
 
 const READ_CHUNK_BYTES = 64 * 1024;
 
-function readBoundedFile(fileDescriptor, maximumBytes) {
+function readBoundedFile(fileDescriptor, maximumBytes, offset = 0) {
   const chunks = [];
   let total = 0;
 
-  while (total <= maximumBytes) {
-    const remaining = maximumBytes + 1 - total;
+  while (total < maximumBytes) {
+    const remaining = maximumBytes - total;
     const buffer = Buffer.allocUnsafe(
       Math.min(READ_CHUNK_BYTES, remaining)
     );
@@ -30,7 +30,7 @@ function readBoundedFile(fileDescriptor, maximumBytes) {
       buffer,
       0,
       buffer.length,
-      null
+      offset + total
     );
 
     if (bytesRead === 0) {
@@ -41,16 +41,7 @@ function readBoundedFile(fileDescriptor, maximumBytes) {
     total += bytesRead;
   }
 
-  const content = Buffer.concat(chunks, total);
-
-  if (content.length > maximumBytes) {
-    throw new ReadOnlyToolError(
-      "File is larger than the configured read limit.",
-      "FILE_TOO_LARGE"
-    );
-  }
-
-  return content;
+  return Buffer.concat(chunks, total);
 }
 
 function decodeUtf8Text(buffer) {
@@ -75,6 +66,88 @@ function decodeUtf8Text(buffer) {
   }
 }
 
+function parseReadRequest(args, configuredMaximumBytes) {
+  requireObjectArgs(args, ["path", "offset", "maxBytes"]);
+
+  if (typeof args.path !== "string" || args.path.trim().length === 0) {
+    throw new ReadOnlyToolError(
+      "path must be a non-empty string.",
+      "INVALID_ARGUMENTS"
+    );
+  }
+
+  const offset = args.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new ReadOnlyToolError(
+      "offset must be a non-negative integer.",
+      "INVALID_ARGUMENTS"
+    );
+  }
+
+  const defaultRangeBytes = Math.min(
+    READ_CHUNK_BYTES,
+    configuredMaximumBytes
+  );
+  const rangeBytes = args.maxBytes ?? defaultRangeBytes;
+
+  if (
+    !Number.isSafeInteger(rangeBytes)
+    || rangeBytes < 1
+    || rangeBytes > READ_CHUNK_BYTES
+    || rangeBytes > configuredMaximumBytes
+  ) {
+    throw new ReadOnlyToolError(
+      "maxBytes must be an integer between 1 and " +
+        Math.min(READ_CHUNK_BYTES, configuredMaximumBytes) + ".",
+      "INVALID_ARGUMENTS"
+    );
+  }
+
+  return Object.freeze({
+    path: args.path,
+    offset,
+    maxBytes: rangeBytes
+  });
+}
+
+function decodeUtf8Range(buffer) {
+  if (buffer.length === 0) {
+    return Object.freeze({
+      buffer,
+      text: ""
+    });
+  }
+
+  for (
+    let trim = 0;
+    trim <= Math.min(3, buffer.length - 1);
+    trim += 1
+  ) {
+    const candidate = trim === 0
+      ? buffer
+      : buffer.subarray(0, buffer.length - trim);
+
+    try {
+      return Object.freeze({
+        buffer: candidate,
+        text: decodeUtf8Text(candidate)
+      });
+    } catch (error) {
+      if (
+        !(error instanceof ReadOnlyToolError)
+        || error.code !== "INVALID_UTF8"
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  throw new ReadOnlyToolError(
+    "Requested byte range does not end on a UTF-8 boundary.",
+    "INVALID_UTF8_RANGE"
+  );
+}
+
 export function createReadTextFileTool({
   allowedRoots,
   maxTextFileBytes = 1024 * 1024
@@ -94,7 +167,8 @@ export function createReadTextFileTool({
     description: "Read a bounded UTF-8 text file inside an allowed root.",
     async execute(args) {
       requireWindows();
-      const requestedPath = requirePathArg(args);
+      const request = parseReadRequest(args, maxBytes);
+      const requestedPath = request.path;
       const canonicalPath = resolveExistingPathWithinAllowedRoots(
         requestedPath,
         allowedRoots
@@ -130,13 +204,36 @@ export function createReadTextFileTool({
           );
         }
 
-        const buffer = readBoundedFile(descriptor, maxBytes);
-        const text = decodeUtf8Text(buffer);
+        if (request.offset > stats.size) {
+          throw new ReadOnlyToolError(
+            "offset is beyond the end of the file.",
+            "OFFSET_OUT_OF_RANGE"
+          );
+        }
+
+        const rawBuffer = readBoundedFile(
+          descriptor,
+          request.maxBytes,
+          request.offset
+        );
+        const decoded = decodeUtf8Range(rawBuffer);
+        const bytes = decoded.buffer.length;
+        const nextOffset = request.offset + bytes;
+
+        if (rawBuffer.length > 0 && bytes === 0) {
+          throw new ReadOnlyToolError(
+            "maxBytes is too small to decode the next UTF-8 character.",
+            "READ_RANGE_TOO_SMALL"
+          );
+        }
 
         return Object.freeze({
           path: canonicalPath,
-          bytes: buffer.length,
-          text
+          offset: request.offset,
+          bytes,
+          next_offset: nextOffset,
+          eof: nextOffset >= stats.size,
+          text: decoded.text
         });
       } finally {
         closeSync(descriptor);
@@ -147,5 +244,7 @@ export function createReadTextFileTool({
 
 export const readTextFileInternals = Object.freeze({
   readBoundedFile,
-  decodeUtf8Text
+  decodeUtf8Text,
+  decodeUtf8Range,
+  parseReadRequest
 });
