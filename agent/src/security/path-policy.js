@@ -1,5 +1,5 @@
 import {
-  existsSync,
+  lstatSync,
   realpathSync,
   statSync
 } from "node:fs";
@@ -203,11 +203,23 @@ function validateNewPathSegment(segment) {
   return segment;
 }
 
+function pathEntryExists(value) {
+  try {
+    return lstatSync(value, { throwIfNoEntry: false }) !== undefined;
+  } catch (error) {
+    throw new PathPolicyError(
+      "Unable to inspect path entry: " + value,
+      "PATH_LOOKUP_FAILED",
+      { cause: error }
+    );
+  }
+}
+
 function findNearestExistingAncestor(candidatePath) {
   let current = normalizeWindowsPath(candidatePath);
   const missingSegments = [];
 
-  while (!existsSync(current)) {
+  while (!pathEntryExists(current)) {
     const root = path.win32.parse(current).root;
 
     if (comparisonKey(current) === comparisonKey(root)) {
@@ -288,7 +300,7 @@ export function resolveNewPathWithinAllowedRoots(
 ) {
   const normalizedCandidate = normalizeWindowsPath(candidatePath);
 
-  if (existsSync(normalizedCandidate)) {
+  if (pathEntryExists(normalizedCandidate)) {
     return resolveExistingPathWithinAllowedRoots(
       normalizedCandidate,
       allowedRoots
@@ -366,5 +378,6 @@ export const pathPolicyInternals = Object.freeze({
   canonicalizeAllowedRoots,
   validateNewPathSegment,
   findNearestExistingAncestor,
+  pathEntryExists,
   comparisonKey
 });
