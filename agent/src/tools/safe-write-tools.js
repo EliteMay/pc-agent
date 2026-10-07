@@ -1,6 +1,8 @@
 import { createCreateDirectoryTool } from "./create-directory.js";
 import { createWriteTextFileTool } from "./write-text-file.js";
 import { createEditTextFileTool } from "./edit-text-file.js";
+import { createCopyFileTool } from "./copy-file.js";
+import { createMovePathTool } from "./move-path.js";
 export { SafeWriteToolError } from "./safe-write-common.js";
 
 export function registerSafeWriteTools(registry, options = {}) {
@@ -28,6 +30,15 @@ export function registerSafeWriteTools(registry, options = {}) {
   registry.register(createEditTextFileTool({
     allowedRoots: [...allowedRoots],
     maxTextFileBytes: options.maxTextFileBytes
+  }));
+
+  registry.register(createCopyFileTool({
+    allowedRoots: [...allowedRoots],
+    maxCopyFileBytes: options.maxCopyFileBytes
+  }));
+
+  registry.register(createMovePathTool({
+    allowedRoots: [...allowedRoots]
   }));
 
   return registry;
