@@ -11,6 +11,8 @@ public sealed class ConfigurationDialog : Form
     private readonly CheckBox _autoAgent = new();
     private readonly CheckBox _autoManager = new();
     private readonly CheckBox _gameSafety = new();
+    private readonly CheckBox _manageDesktopCommander = new();
+    private readonly TextBox _desktopCommanderStartScript = new();
     private readonly AgentConfiguration _existing;
 
     public AgentConfiguration? Result { get; private set; }
@@ -50,6 +52,12 @@ public sealed class ConfigurationDialog : Form
         _autoManager.Checked = existing.AutoStartManager;
         _gameSafety.Text = "Game Safety: VALORANT中はAgentを自動停止";
         _gameSafety.Checked = existing.PauseAgentDuringProtectedGames;
+        _manageDesktopCommander.Text =
+            "Game Safety: Desktop Commander RemoteもManagerで管理";
+        _manageDesktopCommander.Checked =
+            existing.ManageDesktopCommanderRemote;
+        _desktopCommanderStartScript.Text =
+            existing.DesktopCommanderStartScript;
 
         var autoImport = CreateButton("既存Agent設定を自動検出");
         autoImport.Click += (_, _) =>
@@ -89,6 +97,11 @@ public sealed class ConfigurationDialog : Form
         table.Controls.Add(_autoAgent);
         table.Controls.Add(_autoManager);
         table.Controls.Add(_gameSafety);
+        table.Controls.Add(_manageDesktopCommander);
+        AddField(
+            table,
+            "Desktop Commander起動スクリプト（.cmd）",
+            _desktopCommanderStartScript);
 
         var buttons = new FlowLayoutPanel
         {
@@ -153,8 +166,34 @@ public sealed class ConfigurationDialog : Form
             AllowedRoots = roots,
             AutoStartAgent = _autoAgent.Checked,
             AutoStartManager = _autoManager.Checked,
-            PauseAgentDuringProtectedGames = _gameSafety.Checked
+            PauseAgentDuringProtectedGames = _gameSafety.Checked,
+            ManageDesktopCommanderRemote =
+                _manageDesktopCommander.Checked,
+            DesktopCommanderStartScript =
+                _desktopCommanderStartScript.Text.Trim()
         };
+
+        if (config.ManageDesktopCommanderRemote)
+        {
+            if (
+                string.IsNullOrWhiteSpace(config.DesktopCommanderStartScript)
+                || !Path.IsPathFullyQualified(
+                    config.DesktopCommanderStartScript)
+                || !string.Equals(
+                    Path.GetExtension(
+                        config.DesktopCommanderStartScript),
+                    ".cmd",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(
+                    this,
+                    "Desktop CommanderをManagerで管理する場合は、絶対パスの.cmd起動スクリプトを指定してください。",
+                    "設定エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+        }
 
         var validation = AgentConfigurationValidator.Validate(config);
         if (!validation.IsValid)
