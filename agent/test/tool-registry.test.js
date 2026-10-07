@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ToolRegistry } from "../src/tools/tool-registry.js";
 
-test("registers and resolves a known tool", () => {
+test("registers and resolves a known tool", async () => {
   const registry = new ToolRegistry();
   const tool = {
     name: "system_info",
@@ -13,8 +13,12 @@ test("registers and resolves a known tool", () => {
   };
 
   registry.register(tool);
+  const resolved = registry.require("system_info");
 
-  assert.equal(registry.get("system_info"), tool);
+  assert.equal(resolved.name, "system_info");
+  assert.equal(resolved.version, "1");
+  assert.equal(resolved.capability, "system.inspect");
+  assert.deepEqual(await resolved.execute(), { ok: true });
 });
 
 test("rejects duplicate tool names", () => {
