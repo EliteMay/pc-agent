@@ -760,6 +760,18 @@ All existing read-only tools should work through the new registry before write s
 - keep detection isolated from game memory, Vanguard, input, rendering, or injection APIs
 - test the state-transition policy separately from process detection
 
+### v0.11 — Unified Game Safety
+
+- optionally let Manager supervise Desktop Commander Remote
+- detect only explicit Desktop Commander Remote root command lines, never all Node/cmd/PowerShell processes
+- start the configured local .cmd launcher inside a dedicated Windows Job Object
+- stop Desktop Commander Remote while VALORANT is active
+- restore Desktop Commander Remote after the protected game closes
+- stop managed remote control on Emergency Stop
+- expose Desktop Commander supervision state in Manager UI and diagnostics
+- keep the integration disabled by default for portable/general installs
+- migrate the personal PC away from the standalone PowerShell watchdog after release verification
+
 ### Later
 
 - richer completion-evidence policies

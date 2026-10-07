@@ -22,6 +22,7 @@ The Manager is a normal-user .NET 8 WinForms application and provides:
 - SHA-256 verification and path-safe staged extraction before any switch
 - transactional bootstrap that health-checks the new bundled Agent and automatically starts the previous Manager on failure
 - optional Game Safety mode (enabled by default) that checks only protected-game process names, pauses the Agent during VALORANT, and conditionally resumes it after the game closes
+- optional Desktop Commander Remote supervision that identifies only the explicit remote root command, pauses that process tree during VALORANT, and restores it afterward
 
 The Manager is only a supervisor. It does **not** implement Tool Registry, capability, path, risk, or remote-command authorization rules.
 
@@ -82,3 +83,21 @@ When enabled, the Manager checks only whether the VALORANT game process name is 
 If VALORANT starts while the Agent is running, the Manager stops the Agent and remembers that it should resume afterward. If the Agent was already manually stopped, it stays stopped after the game. Starting the Manager while VALORANT is already running defers configured Agent auto-start until the game closes.
 
 Game Safety is a convenience/risk-reduction feature, not a guarantee about anti-cheat behavior.
+
+
+## Desktop Commander integration
+
+Desktop Commander Remote supervision is optional and disabled by default for portable/general installs. When enabled, Settings stores only the local `.cmd` start-script path.
+
+The Manager recognizes an existing Desktop Commander Remote by its explicit command line (for example `npx-cli.js @wonderwhy-er/desktop-commander@latest remote`). It does not stop all Node, cmd, or PowerShell processes.
+
+When the Manager starts Desktop Commander itself, the launcher process is assigned to a dedicated Windows Job Object. Closing that Job Object terminates only that managed process tree.
+
+During Game Safety:
+
+- VALORANT detected -> Agent pauses and Desktop Commander Remote is stopped.
+- VALORANT closed -> Desktop Commander Remote restarts; Agent resumes only if it was previously intended to run.
+- Emergency Stop -> both Agent and managed Desktop Commander Remote are stopped.
+- Manager update -> the old Manager may briefly drop the managed Desktop Commander process; the new Manager restores it after the transactional update.
+
+This integration replaces the need for a separate always-running PowerShell watchdog on configured PCs.

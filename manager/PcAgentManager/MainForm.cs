@@ -11,10 +11,12 @@ public sealed class MainForm : Form
     private readonly ManagerConfigurationStore _configStore;
     private readonly AgentSupervisor _supervisor;
     private readonly ManagerUpdateService _updateService;
+    private readonly DesktopCommanderRemoteSupervisor _desktopCommander;
     private readonly bool _backgroundStart;
 
     private readonly Label _agentValue = ValueLabel();
     private readonly Label _gameSafetyValue = ValueLabel();
+    private readonly Label _desktopCommanderValue = ValueLabel();
     private readonly Label _supabaseValue = ValueLabel();
     private readonly Label _heartbeatValue = ValueLabel();
     private readonly Label _versionValue = ValueLabel();
@@ -35,6 +37,7 @@ public sealed class MainForm : Form
     private readonly GameSafetyState _gameSafetyState = new();
     private bool _allowExit;
     private bool _gameSafetyEnabled;
+    private bool _desktopCommanderManaged;
     private bool _gameSafetyCheckInProgress;
     private string? _approvalDialogOperationId;
 
@@ -43,12 +46,14 @@ public sealed class MainForm : Form
         ManagerConfigurationStore configStore,
         AgentSupervisor supervisor,
         ManagerUpdateService updateService,
+        DesktopCommanderRemoteSupervisor desktopCommander,
         bool backgroundStart)
     {
         _paths = paths;
         _configStore = configStore;
         _supervisor = supervisor;
         _updateService = updateService;
+        _desktopCommander = desktopCommander;
         _backgroundStart = backgroundStart;
 
         Text = "PC Agent Manager";
@@ -87,6 +92,7 @@ public sealed class MainForm : Form
 
         AddStatus(status, "Agent", _agentValue);
         AddStatus(status, "Game Safety", _gameSafetyValue);
+        AddStatus(status, "Desktop Commander", _desktopCommanderValue);
         AddStatus(status, "Supabase", _supabaseValue);
         AddStatus(status, "Heartbeat", _heartbeatValue);
         AddStatus(status, "Version", _versionValue);
@@ -138,19 +144,25 @@ public sealed class MainForm : Form
                     MessageBoxIcon.Warning) == DialogResult.OK)
             {
                 await _supervisor.EmergencyStopAsync();
+                if (_desktopCommanderManaged)
+                {
+                    await _desktopCommander.StopAsync("Emergency Stopped");
+                }
             }
         };
-        _resume.Click += (_, _) =>
+        _resume.Click += async (_, _) =>
         {
             _supervisor.ClearEmergencyStop();
+            await EvaluateGameSafetyAsync();
             Render(_supervisor.Snapshot);
         };
         _diagnose.Click += (_, _) => ShowDiagnostics();
         _update.Click += async (_, _) => await CheckForUpdateAsync();
-        _configure.Click += (_, _) => ShowConfiguration();
+        _configure.Click += async (_, _) => await ShowConfigurationAsync();
 
         _supervisor.SnapshotChanged += SupervisorOnSnapshotChanged;
         _supervisor.PendingApprovalChanged += SupervisorOnPendingApprovalChanged;
+        _desktopCommander.StateChanged += DesktopCommanderOnStateChanged;
         _gameSafetyTimer.Tick += async (_, _) => await EvaluateGameSafetyAsync();
 
         ConfigureTray();
@@ -192,7 +204,7 @@ public sealed class MainForm : Form
         {
             Show();
             Activate();
-            ShowConfiguration();
+            await ShowConfigurationAsync();
             return;
         }
 
@@ -202,25 +214,42 @@ public sealed class MainForm : Form
         }
 
         _gameSafetyEnabled = config.PauseAgentDuringProtectedGames;
+        _desktopCommanderManaged = config.ManageDesktopCommanderRemote;
+        _desktopCommander.Configure(
+            _desktopCommanderManaged,
+            config.DesktopCommanderStartScript);
+
         var emergencyStopped = _supervisor.Snapshot.EmergencyStopped;
+        var gameRunning = _gameSafetyEnabled
+            && ProtectedGameDetector.IsProtectedGameRunning();
 
         if (_gameSafetyEnabled)
         {
-            var gameRunning = ProtectedGameDetector.IsProtectedGameRunning();
             _gameSafetyState.Observe(
                 gameRunning,
                 agentRunning: false,
                 resumeWhenGameEndsIfNotRunning:
                     config.AutoStartAgent && !emergencyStopped);
+        }
 
-            Render(_supervisor.Snapshot);
-
-            if (!gameRunning && config.AutoStartAgent && !emergencyStopped)
+        if (_desktopCommanderManaged)
+        {
+            if (gameRunning || emergencyStopped)
             {
-                await _supervisor.StartAsync();
+                await _desktopCommander.StopAsync(
+                    emergencyStopped
+                        ? "Emergency Stopped"
+                        : "Paused - VALORANT");
+            }
+            else
+            {
+                await _desktopCommander.StartAsync();
             }
         }
-        else if (config.AutoStartAgent && !emergencyStopped)
+
+        Render(_supervisor.Snapshot);
+
+        if (!gameRunning && config.AutoStartAgent && !emergencyStopped)
         {
             await _supervisor.StartAsync();
         }
@@ -239,6 +268,23 @@ public sealed class MainForm : Form
         else
         {
             Render(snapshot);
+        }
+    }
+
+    private void DesktopCommanderOnStateChanged(object? sender, EventArgs e)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => Render(_supervisor.Snapshot));
+        }
+        else
+        {
+            Render(_supervisor.Snapshot);
         }
     }
 
@@ -431,6 +477,7 @@ public sealed class MainForm : Form
                     ? "PAUSED - VALORANT (auto resume)"
                     : "PAUSED - VALORANT")
                 : "Monitoring";
+        _desktopCommanderValue.Text = _desktopCommander.State;
         _supabaseValue.Text = snapshot.QueueConnectivity;
         _heartbeatValue.Text = snapshot.LastHeartbeat is null
             ? "未確認"
@@ -519,7 +566,6 @@ public sealed class MainForm : Form
     {
         if (
             IsDisposed
-            || !_gameSafetyEnabled
             || _gameSafetyCheckInProgress)
         {
             return;
@@ -529,10 +575,43 @@ public sealed class MainForm : Form
 
         try
         {
-            var gameRunning = ProtectedGameDetector.IsProtectedGameRunning();
-            var transition = _gameSafetyState.Observe(
-                gameRunning,
-                agentRunning: _supervisor.Snapshot.ProcessId is not null);
+            var gameRunning = _gameSafetyEnabled
+                && ProtectedGameDetector.IsProtectedGameRunning();
+
+            var transition = _gameSafetyEnabled
+                ? _gameSafetyState.Observe(
+                    gameRunning,
+                    agentRunning:
+                        _supervisor.Snapshot.ProcessId is not null)
+                : new GameSafetyTransition(
+                    EnteredGame: false,
+                    ExitedGame: false,
+                    ShouldPauseAgent: false,
+                    ShouldResumeAgent: false);
+
+            if (_desktopCommanderManaged)
+            {
+                if (
+                    gameRunning
+                    || _supervisor.Snapshot.EmergencyStopped)
+                {
+                    if (_desktopCommander.IsRunning())
+                    {
+                        await _desktopCommander.StopAsync(
+                            _supervisor.Snapshot.EmergencyStopped
+                                ? "Emergency Stopped"
+                                : "Paused - VALORANT");
+                    }
+                }
+                else if (!_desktopCommander.IsRunning())
+                {
+                    await _desktopCommander.StartAsync();
+                }
+                else
+                {
+                    _desktopCommander.RefreshState();
+                }
+            }
 
             if (transition.ShouldPauseAgent)
             {
@@ -540,7 +619,7 @@ public sealed class MainForm : Form
                 _tray.ShowBalloonTip(
                     4000,
                     "PC Agent - Game Safety",
-                    "VALORANTを検知したためAgentを停止しました。",
+                    "VALORANTを検知したためAgentとDesktop Commander Remoteを停止しました。",
                     ToolTipIcon.Info);
             }
 
@@ -552,7 +631,7 @@ public sealed class MainForm : Form
                 _tray.ShowBalloonTip(
                     4000,
                     "PC Agent - Game Safety",
-                    "VALORANT終了を検知したためAgentを再開しました。",
+                    "VALORANT終了を検知したため開発環境を再開しました。",
                     ToolTipIcon.Info);
             }
 
@@ -707,7 +786,7 @@ public sealed class MainForm : Form
         }
     }
 
-    private void ShowConfiguration()
+    private async Task ShowConfigurationAsync()
     {
         var existing = _configStore.Load();
         using var dialog = new ConfigurationDialog(existing);
@@ -717,17 +796,33 @@ public sealed class MainForm : Form
             return;
         }
 
+        var wasDesktopCommanderManaged = _desktopCommanderManaged;
+
         _configStore.Save(dialog.Result);
 
         _gameSafetyEnabled = dialog.Result.PauseAgentDuringProtectedGames;
+        _desktopCommanderManaged =
+            dialog.Result.ManageDesktopCommanderRemote;
+        _desktopCommander.Configure(
+            _desktopCommanderManaged,
+            dialog.Result.DesktopCommanderStartScript);
+
         if (!_gameSafetyEnabled)
         {
             _gameSafetyState.Reset();
         }
+
+        if (
+            wasDesktopCommanderManaged
+            && !_desktopCommanderManaged)
+        {
+            await _desktopCommander.StopAsync("Disabled");
+        }
         else
         {
-            _ = EvaluateGameSafetyAsync();
+            await EvaluateGameSafetyAsync();
         }
+
         Render(_supervisor.Snapshot);
 
         try
@@ -754,7 +849,13 @@ public sealed class MainForm : Form
 
     private void ShowDiagnostics()
     {
-        var text = _supervisor.BuildDiagnostics();
+        var text = _supervisor.BuildDiagnostics()
+            + Environment.NewLine
+            + $"Game Safety: {(_gameSafetyEnabled ? "enabled" : "disabled")}"
+            + Environment.NewLine
+            + $"Desktop Commander managed: {_desktopCommanderManaged}"
+            + Environment.NewLine
+            + $"Desktop Commander state: {_desktopCommander.State}";
         using var dialog = new Form
         {
             Text = "PC Agent Diagnostic",
@@ -801,6 +902,12 @@ public sealed class MainForm : Form
         {
             _allowExit = true;
             await _supervisor.StopAsync();
+
+            if (_desktopCommanderManaged)
+            {
+                await _desktopCommander.StopAsync("Stopped");
+            }
+
             _tray.Visible = false;
             Close();
         });

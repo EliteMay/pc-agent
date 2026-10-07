@@ -91,6 +91,8 @@ internal static class Program
         var updateService = new ManagerUpdateService(
             paths,
             logger);
+        using var desktopCommander =
+            new DesktopCommanderRemoteSupervisor(logger);
 
         var background = args.Contains(
             "--background",
@@ -100,6 +102,7 @@ internal static class Program
             store,
             supervisor,
             updateService,
+            desktopCommander,
             background);
 
         try

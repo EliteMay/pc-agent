@@ -107,6 +107,43 @@ Run("Configuration validation requires endpoint, device, token and roots", () =>
     Require(ok.IsValid, string.Join("; ", ok.Errors));
 });
 
+Run("Desktop Commander supervisor matches only remote root commands", () =>
+{
+    Require(
+        DesktopCommanderRemoteSupervisor.IsRemoteRootCommandLine(
+            "\"C:\\Program Files\\nodejs\\node.exe\" "
+            + "\"C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js\" "
+            + "@wonderwhy-er/desktop-commander@latest remote"),
+        "npx desktop-commander remote root should match");
+
+    Require(
+        DesktopCommanderRemoteSupervisor.IsRemoteRootCommandLine(
+            "C:\\WINDOWS\\system32\\cmd.exe /d /s /c desktop-commander remote"),
+        "direct desktop-commander remote command should match");
+
+    Require(
+        DesktopCommanderRemoteSupervisor.IsRemoteRootCommandLine(
+            "\"node\" "
+            + "\"C:\\Users\\test\\AppData\\Local\\npm-cache\\_npx\\pkg\\node_modules\\@wonderwhy-er\\desktop-commander\\dist\\index.js\" "
+            + "remote"),
+        "direct dist index remote command should match");
+
+    Require(
+        !DesktopCommanderRemoteSupervisor.IsRemoteRootCommandLine(
+            "powershell.exe -File D:\\AI\\tools\\desktop-commander-remote\\watchdog.ps1"),
+        "watchdog PowerShell must not match");
+
+    Require(
+        !DesktopCommanderRemoteSupervisor.IsRemoteRootCommandLine(
+            "\"C:\\Program Files\\nodejs\\node.exe\" server.js"),
+        "unrelated Node process must not match");
+
+    Require(
+        !DesktopCommanderRemoteSupervisor.IsRemoteRootCommandLine(
+            "powershell.exe -Command Get-CimInstance Win32_Process -match desktop-commander"),
+        "Desktop Commander child shell must not match");
+});
+
 Run("Game Safety recognizes only protected game process names", () =>
 {
     Require(
