@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using PcAgentManager.Services;
 using PcAgentManager.Configuration;
 using PcAgentManager.Supervision;
 
@@ -74,6 +76,9 @@ Run("Manager paths stay under LocalAppData", () =>
     Require(paths.JournalPath.StartsWith(root, StringComparison.OrdinalIgnoreCase), "journal path");
     Require(paths.EmergencyStopPath.StartsWith(root, StringComparison.OrdinalIgnoreCase), "emergency path");
     Require(paths.LogPath.StartsWith(root, StringComparison.OrdinalIgnoreCase), "log path");
+    Require(paths.ReleasesDirectory.StartsWith(root, StringComparison.OrdinalIgnoreCase), "releases path");
+    Require(paths.UpdateDownloadsDirectory.StartsWith(root, StringComparison.OrdinalIgnoreCase), "updates path");
+    Require(paths.UpdateTransactionPath.StartsWith(root, StringComparison.OrdinalIgnoreCase), "transaction path");
 });
 
 Run("Configuration validation requires endpoint, device, token and roots", () =>
@@ -206,6 +211,108 @@ Run("Legacy importer ignores unrelated device.json files", () =>
     {
         Directory.Delete(root, recursive: true);
     }
+});
+
+
+Run("Updater compares semantic versions and parses SHA-256 files", () =>
+{
+    Require(
+        ManagerUpdateService.IsNewerVersion("0.6.0", "0.5.0"),
+        "0.6.0 should be newer than 0.5.0");
+    Require(
+        !ManagerUpdateService.IsNewerVersion("0.5.0", "0.5.0"),
+        "equal versions are not updates");
+    Require(
+        !ManagerUpdateService.IsNewerVersion("0.4.9", "0.5.0"),
+        "older versions are not updates");
+
+    var hash = new string('a', 64);
+    Equal(
+        hash,
+        ManagerUpdateService.ParseSha256Text(
+            hash + "  pc-agent-manager-win-x64.zip"),
+        "sha256 parser");
+
+    var invalidRejected = false;
+    try
+    {
+        _ = ManagerUpdateService.ParseSha256Text("not-a-hash");
+    }
+    catch (InvalidDataException)
+    {
+        invalidRejected = true;
+    }
+
+    Require(invalidRejected, "invalid SHA-256 text must be rejected");
+});
+
+Run("Updater rejects ZIP path traversal", () =>
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "PcAgentUpdateZipTests",
+        Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    var archivePath = Path.Combine(root, "update.zip");
+    var destination = Path.Combine(root, "extract");
+
+    try
+    {
+        using (var archive = ZipFile.Open(
+                   archivePath,
+                   ZipArchiveMode.Create))
+        {
+            var entry = archive.CreateEntry("../escape.txt");
+            using var writer = new StreamWriter(entry.Open());
+            writer.Write("escape");
+        }
+
+        var rejected = false;
+        try
+        {
+            ManagerUpdateService.ExtractZipSafely(
+                archivePath,
+                destination);
+        }
+        catch (InvalidDataException)
+        {
+            rejected = true;
+        }
+
+        Require(rejected, "path traversal archive must be rejected");
+        Require(
+            !File.Exists(Path.Combine(root, "escape.txt")),
+            "path traversal must not create an escaped file");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Update bootstrap only accepts candidate executables inside release root", () =>
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "PcAgentUpdatePathTests",
+        Guid.NewGuid().ToString("N"));
+    var releases = Path.Combine(root, "releases");
+    var candidate = Path.Combine(
+        releases,
+        "0.6.0",
+        "PcAgentManager.exe");
+    var sibling = Path.Combine(
+        root,
+        "releases-evil",
+        "PcAgentManager.exe");
+
+    Require(
+        UpdateBootstrapper.IsPathInside(candidate, releases),
+        "candidate under releases should be allowed");
+    Require(
+        !UpdateBootstrapper.IsPathInside(sibling, releases),
+        "sibling-prefix path must be rejected");
 });
 
 
