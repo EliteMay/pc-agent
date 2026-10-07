@@ -75,3 +75,35 @@ test("confirmation-required tools must provide an approval summary builder", () 
     (error) => error?.code === "INVALID_APPROVAL_SUMMARY"
   );
 });
+
+
+test("confirmation metadata is mandatory", () => {
+  const registry = new ToolRegistry();
+
+  assert.throws(
+    () => registry.register({
+      name: "mutation_probe",
+      version: "1",
+      capability: "mutation.test",
+      risk: "medium",
+      execute: async () => ({ ok: true })
+    }),
+    (error) => error?.code === "INVALID_TOOL_CONFIRMATION"
+  );
+});
+
+test("confirmation-required tools need an approval summary builder", () => {
+  const registry = new ToolRegistry();
+
+  assert.throws(
+    () => registry.register({
+      name: "mutation_probe",
+      version: "1",
+      capability: "mutation.test",
+      risk: "medium",
+      confirmation: "required",
+      execute: async () => ({ ok: true })
+    }),
+    (error) => error?.code === "INVALID_APPROVAL_SUMMARY"
+  );
+});
