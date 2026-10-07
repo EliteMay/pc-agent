@@ -4,7 +4,7 @@ import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
-const VERSION = "8.3";
+const VERSION = "9";
 const MCP_WAIT_MS = 120000;
 
 const READ_ONLY_TOOLS = new Set([
@@ -12,6 +12,8 @@ const READ_ONLY_TOOLS = new Set([
   "system_info",
   "list_directory",
   "read_text_file",
+  "find_paths",
+  "search_text",
   "list_processes",
 ]);
 
@@ -88,6 +90,41 @@ const TOOLS = [
       },
       required: ["path"],
       additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "find_paths",
+    title: "Find files and folders",
+    description: "Search file and directory names recursively inside an allowed PC Agent root. Bounded depth/results; sensitive paths and links are not traversed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", minLength: 1 },
+        query: { type: "string", minLength: 1, maxLength: 256 },
+        max_depth: { type: "integer", minimum: 1, maximum: 8 },
+        max_results: { type: "integer", minimum: 1, maximum: 200 }
+      },
+      required: ["path", "query"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "search_text",
+    title: "Search text in workspace files",
+    description: "Search literal text recursively in bounded UTF-8 files inside an allowed PC Agent root. Sensitive paths, links, dependency directories, oversized files, and binary files are skipped.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", minLength: 1 },
+        query: { type: "string", minLength: 1, maxLength: 256 },
+        max_depth: { type: "integer", minimum: 1, maximum: 8 },
+        max_results: { type: "integer", minimum: 1, maximum: 200 },
+        case_sensitive: { type: "boolean" }
+      },
+      required: ["path", "query"],
+      additionalProperties: false
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -330,6 +367,47 @@ function validateToolArgs(name: string, args: any) {
       if (!Number.isInteger(n) || n < 1 || n > 65536) {
         throw new Error("maxBytes must be an integer from 1 to 65536");
       }
+    }
+  }
+
+  if (name === "find_paths" || name === "search_text") {
+    if (!args || typeof args.path !== "string" || !args.path.trim()) {
+      throw new Error("path is required");
+    }
+    if (
+      typeof args.query !== "string"
+      || args.query.length < 1
+      || args.query.length > 256
+      || /[\r\n]/.test(args.query)
+    ) {
+      throw new Error("query must be a single-line string from 1 to 256 characters");
+    }
+    if (
+      args.max_depth !== undefined
+      && (
+        !Number.isInteger(args.max_depth)
+        || args.max_depth < 1
+        || args.max_depth > 8
+      )
+    ) {
+      throw new Error("max_depth must be an integer from 1 to 8");
+    }
+    if (
+      args.max_results !== undefined
+      && (
+        !Number.isInteger(args.max_results)
+        || args.max_results < 1
+        || args.max_results > 200
+      )
+    ) {
+      throw new Error("max_results must be an integer from 1 to 200");
+    }
+    if (
+      name === "search_text"
+      && args.case_sensitive !== undefined
+      && typeof args.case_sensitive !== "boolean"
+    ) {
+      throw new Error("case_sensitive must be a boolean");
     }
   }
 
