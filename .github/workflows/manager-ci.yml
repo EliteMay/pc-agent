@@ -1,0 +1,43 @@
+name: Manager CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+    paths:
+      - 'manager/**'
+      - 'agent/**'
+      - '.github/workflows/manager-ci.yml'
+  pull_request:
+    paths:
+      - 'manager/**'
+      - 'agent/**'
+      - '.github/workflows/manager-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Node tests
+        working-directory: agent
+        run: npm test
+      - name: Restore Manager
+        run: dotnet restore manager/PcAgentManager/PcAgentManager.csproj
+      - name: Restore Manager tests
+        run: dotnet restore manager/PcAgentManager.Tests/PcAgentManager.Tests.csproj
+      - name: Build Manager
+        run: dotnet build manager/PcAgentManager/PcAgentManager.csproj -c Release --no-restore
+      - name: Manager regression tests
+        run: dotnet run --project manager/PcAgentManager.Tests/PcAgentManager.Tests.csproj -c Release --no-restore
