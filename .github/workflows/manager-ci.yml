@@ -65,9 +65,9 @@ jobs:
           Copy-Item 'agent\package.json' (Join-Path $bundle 'Agent\package.json') -Force
 
           $manager = Join-Path $bundle 'PcAgentManager.exe'
-          & $manager --bundle-check
-          if ($LASTEXITCODE -ne 0) {
-            throw "Bundle check failed with exit code $LASTEXITCODE"
+          $check = Start-Process -FilePath $manager -ArgumentList '--bundle-check' -Wait -PassThru
+          if ($check.ExitCode -ne 0) {
+            throw "Bundle check failed with exit code $($check.ExitCode)"
           }
 
           Get-FileHash $manager -Algorithm SHA256 |
