@@ -10,4 +10,4 @@
     "test": "node --test test/*.test.js",
     "start": "node bin/pc-agent.js"
   }
-}\n
+}
