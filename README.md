@@ -72,6 +72,7 @@ The first production slice is the Agent safety foundation:
 - v0.8.3 v1-only queue: legacy `queued`/`claimed` states and `claim_kaito_pc_command` are removed from production; old Edge Function slugs return a 410 retirement response
 - v0.9 workspace discovery: bounded `find_paths` and `search_text` tools let ChatGPT locate projects/code under allowed roots without Desktop Commander; dependency/sensitive/link traversal remains blocked
 - v0.10 Game Safety: Manager detects the VALORANT game process by name only, pauses the Agent while the game is running, and restores it afterward only when it was previously intended to run
+- v0.11 unified Game Safety: Manager can optionally supervise Desktop Commander Remote, stop only its identified remote process tree during VALORANT, and restore it afterward; the old PowerShell watchdog is no longer required on configured PCs
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
