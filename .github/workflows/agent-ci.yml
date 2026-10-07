@@ -1,0 +1,35 @@
+name: Agent CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+    paths:
+      - 'agent/**'
+      - '.github/workflows/agent-ci.yml'
+  pull_request:
+    paths:
+      - 'agent/**'
+      - '.github/workflows/agent-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+      - name: Install
+        working-directory: agent
+        run: npm install --package-lock-only
+      - name: Test
+        working-directory: agent
+        run: npm test
