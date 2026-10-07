@@ -258,7 +258,7 @@ public sealed class DesktopCommanderRemoteSupervisor : IDisposable
         var hasRemoteToken =
             normalized.EndsWith(" remote", StringComparison.Ordinal)
             || normalized.Contains(" remote ", StringComparison.Ordinal)
-            || normalized.Contains(" remote"", StringComparison.Ordinal);
+            || normalized.Contains(" remote\"", StringComparison.Ordinal);
 
         if (!hasRemoteToken)
         {
@@ -268,7 +268,7 @@ public sealed class DesktopCommanderRemoteSupervisor : IDisposable
         var npxRoot =
             normalized.Contains("npx-cli.js", StringComparison.Ordinal)
             && normalized.Contains(
-                "@wonderwhy-er\desktop-commander",
+                @"@wonderwhy-er\desktop-commander",
                 StringComparison.Ordinal);
 
         var directCommand =
@@ -278,7 +278,7 @@ public sealed class DesktopCommanderRemoteSupervisor : IDisposable
 
         var directNode =
             normalized.Contains(
-                "@wonderwhy-er\desktop-commander\dist\index.js",
+                @"@wonderwhy-er\desktop-commander\dist\index.js",
                 StringComparison.Ordinal);
 
         return npxRoot || directCommand || directNode;
