@@ -44,8 +44,8 @@ test("registers the five read-only tools including v1 ping", () => {
       fixture.registry.list().map((tool) => tool.name).sort(),
       [
         "list_directory",
-        "ping",
         "list_processes",
+        "ping",
         "read_text_file",
         "system_info"
       ]
