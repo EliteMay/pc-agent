@@ -159,6 +159,13 @@ public sealed class ManagerUpdateService
         }
 
         var normalizedVersion = NormalizeVersion(parsedVersion);
+
+        if (!IsNewerVersion(normalizedVersion, CurrentVersion))
+        {
+            throw new InvalidDataException(
+                "Refusing to stage an update that is not newer than the running Manager.");
+        }
+
         var downloadDirectory = Path.Combine(
             _paths.UpdateDownloadsDirectory,
             normalizedVersion);
