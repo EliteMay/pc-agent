@@ -1,6 +1,14 @@
 import { validateCommandEnvelope } from "../protocol/command-envelope.js";
 import { executeOnce } from "./execute-once.js";
 
+export class AgentRuntimeError extends Error {
+  constructor(message, code = "AGENT_RUNTIME_ERROR") {
+    super(message);
+    this.name = "AgentRuntimeError";
+    this.code = code;
+  }
+}
+
 export async function executeRegisteredCommand({
   registry,
   journal,
@@ -17,6 +25,13 @@ export async function executeRegisteredCommand({
 
   const validatedCommand = validateCommandEnvelope(command, { now });
   const tool = registry.require(validatedCommand.tool);
+
+  if (tool.version !== validatedCommand.tool_version) {
+    throw new AgentRuntimeError(
+      `Queued tool version ${validatedCommand.tool_version} does not match registered version ${tool.version} for ${tool.name}.`,
+      "TOOL_VERSION_MISMATCH"
+    );
+  }
 
   return executeOnce({
     journal,
