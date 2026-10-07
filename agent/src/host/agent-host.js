@@ -71,6 +71,7 @@ export async function runAgentHost(config) {
           client,
           registry,
           journal,
+          approvalProvider: approvalBroker,
           waitMs: 5000,
           onCommand(command) {
             health = setActiveCommand(health, command.command_id);
