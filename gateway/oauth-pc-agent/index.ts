@@ -4,7 +4,7 @@ import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
-const VERSION = "6";
+const VERSION = "7";
 const MCP_WAIT_MS = 120000;
 
 const READ_ONLY_TOOLS = new Set([
@@ -146,6 +146,77 @@ const TOOLS = [
         timeout_ms: { type: "integer", minimum: 1000, maximum: 60000 }
       },
       required: ["program", "args", "cwd"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "task_begin",
+    title: "Begin a bounded PC task",
+    description: "Create a bounded Observe -> Plan -> Act -> Verify task. This does not authorize any PC operation by itself.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        completion_criteria: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          items: { type: "string", minLength: 1, maxLength: 256 }
+        },
+        max_actions: { type: "integer", minimum: 1, maximum: 12 },
+        max_retries: { type: "integer", minimum: 0, maximum: 5 },
+        max_duration_ms: { type: "integer", minimum: 1000, maximum: 900000 }
+      },
+      required: ["title", "completion_criteria"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "task_status",
+    title: "Get bounded PC task status",
+    description: "Read task budget, phase counts, verification state, and block/expiry status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "string", format: "uuid" }
+      },
+      required: ["task_id"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "task_step",
+    title: "Run one bounded PC task step",
+    description: "Run exactly one existing PC Agent tool as an observe, act, or verify step under task budgets. Agent policy and local approval remain mandatory.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "string", format: "uuid" },
+        step_id: { type: "string", minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9._:-]+$" },
+        phase: { type: "string", enum: ["observe", "act", "verify"] },
+        tool: { type: "string", enum: [...DEVICE_TOOLS] },
+        arguments: { type: "object" }
+      },
+      required: ["task_id", "step_id", "phase", "tool", "arguments"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "task_finish",
+    title: "Finish a bounded PC task",
+    description: "Finish a task as succeeded, partial, failed, or cancelled. Success requires a successful verify step.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "string", format: "uuid" },
+        outcome: { type: "string", enum: ["succeeded", "partial", "failed", "cancelled"] },
+        summary: { type: "string", maxLength: 2000 }
+      },
+      required: ["task_id", "outcome"],
       additionalProperties: false
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -321,7 +392,222 @@ function validateToolArgs(name: string, args: any) {
   }
 }
 
-async function enqueueTool(ctx: any, toolName: string, args: unknown) {
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TASK_PHASES = new Set(["observe", "act", "verify"]);
+
+function requireUuid(value: unknown, name: string) {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    throw new Error(name + " must be a UUID");
+  }
+  return value;
+}
+
+function validateTaskStepArgs(args: any) {
+  requireUuid(args?.task_id, "task_id");
+  if (typeof args?.step_id !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(args.step_id)) {
+    throw new Error("step_id is invalid");
+  }
+  if (!TASK_PHASES.has(args?.phase)) throw new Error("phase is invalid");
+  if (!DEVICE_TOOLS.has(args?.tool)) throw new Error("tool is not allowed");
+  if ((args.phase === "observe" || args.phase === "verify") && !READ_ONLY_TOOLS.has(args.tool)) {
+    throw new Error("observe and verify phases may use read-only tools only");
+  }
+  if (args.phase === "act" && READ_ONLY_TOOLS.has(args.tool)) {
+    throw new Error("act phase must use a locally governed write or development tool");
+  }
+  if (!args?.arguments || typeof args.arguments !== "object" || Array.isArray(args.arguments)) {
+    throw new Error("arguments must be an object");
+  }
+  validateToolArgs(args.tool, args.arguments);
+}
+
+function taskPublicView(row: any) {
+  if (!row) return null;
+  return {
+    task_id: row.task_id,
+    device_id: row.device_id,
+    title: row.title,
+    status: row.status,
+    completion_criteria: row.completion_criteria,
+    budgets: {
+      max_actions: row.max_actions,
+      max_retries: row.max_retries,
+      max_steps: row.max_steps,
+      max_duration_ms: row.max_duration_ms,
+    },
+    usage: {
+      step_count: row.step_count,
+      action_count: row.action_count,
+      retry_count: row.retry_count,
+      observe_count: row.observe_count,
+      verify_count: row.verify_count,
+    },
+    last_phase: row.last_phase,
+    last_step_success: row.last_step_success,
+    repeated_failure_count: row.repeated_failure_count,
+    blocked_reason: row.blocked_reason,
+    started_at: row.started_at,
+    deadline_at: row.deadline_at,
+    completed_at: row.completed_at,
+    summary: row.summary,
+  };
+}
+
+async function sha256Hex(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function failureFingerprint(toolName: string, error: any) {
+  const code = String(error?.errorCode ?? error?.code ?? "UNKNOWN_ERROR").slice(0, 128);
+  const message = String(error?.message ?? error ?? "Unknown error")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 512);
+  return sha256Hex(toolName + "|" + code + "|" + message);
+}
+
+async function beginTask(ctx: any, args: any) {
+  const userId = requireUuid(ctx?.userClaims?.id, "OAuth user id");
+  const device = await newestDevice(ctx);
+  if (!device) throw new Error("No paired PC Agent device is registered.");
+
+  if (typeof args?.title !== "string" || args.title.trim().length < 1 || args.title.length > 200) {
+    throw new Error("title must be 1..200 characters");
+  }
+  if (!Array.isArray(args?.completion_criteria)
+      || args.completion_criteria.length < 1
+      || args.completion_criteria.length > 8
+      || args.completion_criteria.some((v: any) => typeof v !== "string" || v.trim().length < 1 || v.length > 256)) {
+    throw new Error("completion_criteria must contain 1..8 bounded strings");
+  }
+
+  const maxActions = args.max_actions ?? 6;
+  const maxRetries = args.max_retries ?? 2;
+  const maxDurationMs = args.max_duration_ms ?? 300000;
+  if (!Number.isInteger(maxActions) || maxActions < 1 || maxActions > 12) throw new Error("max_actions must be 1..12");
+  if (!Number.isInteger(maxRetries) || maxRetries < 0 || maxRetries > 5) throw new Error("max_retries must be 0..5");
+  if (!Number.isInteger(maxDurationMs) || maxDurationMs < 1000 || maxDurationMs > 900000) throw new Error("max_duration_ms must be 1000..900000");
+  const maxSteps = Math.min(32, maxActions * 3 + maxRetries + 4);
+
+  const { data, error } = await ctx.supabaseAdmin
+    .from("kaito_pc_task_runs")
+    .insert({
+      user_id: userId,
+      device_id: device.device_id,
+      title: args.title.trim(),
+      completion_criteria: args.completion_criteria.map((v: string) => v.trim()),
+      max_actions: maxActions,
+      max_retries: maxRetries,
+      max_steps: maxSteps,
+      max_duration_ms: maxDurationMs,
+      deadline_at: new Date(Date.now() + maxDurationMs).toISOString(),
+    })
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return taskPublicView(data);
+}
+
+async function getTask(ctx: any, taskId: string) {
+  const userId = requireUuid(ctx?.userClaims?.id, "OAuth user id");
+  requireUuid(taskId, "task_id");
+
+  const nowIso = new Date().toISOString();
+  await ctx.supabaseAdmin
+    .from("kaito_pc_task_runs")
+    .update({ status: "expired", completed_at: nowIso })
+    .eq("task_id", taskId)
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .lte("deadline_at", nowIso);
+
+  const { data, error } = await ctx.supabaseAdmin
+    .from("kaito_pc_task_runs")
+    .select("*")
+    .eq("task_id", taskId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Task not found.");
+  return taskPublicView(data);
+}
+
+async function beginTaskStep(ctx: any, args: any) {
+  validateTaskStepArgs(args);
+  const userId = requireUuid(ctx?.userClaims?.id, "OAuth user id");
+  const { data, error } = await ctx.supabaseAdmin.rpc(
+    "begin_pc_agent_task_step_v1",
+    {
+      p_task_id: args.task_id,
+      p_user_id: userId,
+      p_logical_step_id: args.step_id,
+      p_phase: args.phase,
+      p_tool_name: args.tool,
+    },
+  );
+  if (error) throw error;
+  const row = data?.[0];
+  if (!row?.accepted) {
+    return { accepted: false, reason: row?.reason ?? "task_step_rejected", task_status: row?.task_status ?? null };
+  }
+  return row;
+}
+
+async function finishTaskStep(ctx: any, {
+  taskId,
+  stepRunId,
+  success,
+  fingerprint = null,
+  errorCode = null,
+  commandId = null,
+}: any) {
+  const userId = requireUuid(ctx?.userClaims?.id, "OAuth user id");
+  const { data, error } = await ctx.supabaseAdmin.rpc(
+    "finish_pc_agent_task_step_v1",
+    {
+      p_task_id: taskId,
+      p_user_id: userId,
+      p_step_run_id: stepRunId,
+      p_success: success,
+      p_failure_fingerprint: fingerprint,
+      p_error_code: errorCode,
+      p_command_id: commandId,
+    },
+  );
+  if (error) throw error;
+  return data?.[0] ?? { accepted: false, reason: "empty_task_step_finish" };
+}
+
+async function finishTask(ctx: any, args: any) {
+  const userId = requireUuid(ctx?.userClaims?.id, "OAuth user id");
+  requireUuid(args?.task_id, "task_id");
+  if (!["succeeded", "partial", "failed", "cancelled"].includes(args?.outcome)) {
+    throw new Error("outcome is invalid");
+  }
+  if (args?.summary !== undefined && (typeof args.summary !== "string" || args.summary.length > 2000)) {
+    throw new Error("summary must be at most 2000 characters");
+  }
+  const { data, error } = await ctx.supabaseAdmin.rpc(
+    "finish_pc_agent_task_v1",
+    {
+      p_task_id: args.task_id,
+      p_user_id: userId,
+      p_outcome: args.outcome,
+      p_summary: args.summary ?? null,
+    },
+  );
+  if (error) throw error;
+  const row = data?.[0];
+  if (!row?.accepted) return { success: false, reason: row?.reason ?? "task_finish_rejected", status: row?.task_status ?? null };
+  return { success: true, status: row.task_status };
+}
+
+async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetadata: Record<string, unknown> = {}) {
   if (!DEVICE_TOOLS.has(toolName)) {
     throw new Error("Tool is not allowed by the PC Agent OAuth gateway.");
   }
@@ -347,6 +633,7 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown) {
       protocol_version: 1,
       arguments: args ?? {},
       request_metadata: {
+        ...taskMetadata,
         source: "oauth-gateway",
         transport: useAgentV1 ? "pc-agent-v1" : "legacy",
         local_approval_required: requiresLocalApproval
@@ -373,18 +660,19 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown) {
     if (error) throw error;
 
     if (row?.status === "completed") {
-      return { success: true, result: row.result };
+      return { success: true, result: row.result, commandId };
     }
 
     if (row?.status === "failed") {
       let parsed: any = row.error_text;
       try { parsed = JSON.parse(row.error_text); } catch {}
-      return { success: false, error: parsed };
+      return { success: false, error: parsed, commandId };
     }
 
     if (row?.status === "expired") {
       return {
         success: false,
+        commandId,
         error: {
           errorCode: "expired",
           message: "PC command expired.",
@@ -407,6 +695,7 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown) {
 
   return {
     success: false,
+    commandId,
     error: {
       errorCode: "device_timeout",
       message: "Timed out waiting for the Windows PC Agent.",
@@ -434,6 +723,7 @@ const handler = async (req: Request, ctx: any) => {
       oauth: true,
       readOnly: false,
       safeWrite: true,
+      orchestration: true,
       authenticated: true,
     });
   }
@@ -511,6 +801,7 @@ const handler = async (req: Request, ctx: any) => {
         authenticated: true,
         readOnly: false,
         safeWrite: true,
+        orchestration: true,
         gateway: "supabase-oauth",
         service: "pc-agent-oauth",
         version: VERSION,
@@ -529,6 +820,143 @@ const handler = async (req: Request, ctx: any) => {
         lastSeenAt: device?.last_seen_at ?? null,
         agentVersion: device?.agent_version ?? null,
       });
+    }
+
+
+    if (name === "task_begin") {
+      try {
+        return mcpResult(body.id, await beginTask(ctx, args), false);
+      } catch (error) {
+        return mcpResult(body.id, {
+          success: false,
+          errorCode: "task_begin_error",
+          message: error?.message ?? String(error),
+          retryable: false,
+        }, true);
+      }
+    }
+
+    if (name === "task_status") {
+      try {
+        return mcpResult(body.id, await getTask(ctx, args?.task_id), false);
+      } catch (error) {
+        return mcpResult(body.id, {
+          success: false,
+          errorCode: "task_status_error",
+          message: error?.message ?? String(error),
+          retryable: false,
+        }, true);
+      }
+    }
+
+    if (name === "task_finish") {
+      try {
+        const outcome = await finishTask(ctx, args);
+        return mcpResult(body.id, outcome, !outcome.success);
+      } catch (error) {
+        return mcpResult(body.id, {
+          success: false,
+          errorCode: "task_finish_error",
+          message: error?.message ?? String(error),
+          retryable: false,
+        }, true);
+      }
+    }
+
+    if (name === "task_step") {
+      let reservation: any = null;
+      try {
+        reservation = await beginTaskStep(ctx, args);
+        if (!reservation.accepted) {
+          return mcpResult(body.id, {
+            success: false,
+            errorCode: reservation.reason,
+            taskStatus: reservation.task_status,
+            retryable: false,
+          }, true);
+        }
+
+        const outcome = await enqueueTool(
+          ctx,
+          args.tool,
+          args.arguments,
+          {
+            task_id: args.task_id,
+            task_step_id: args.step_id,
+            task_step_run_id: reservation.step_run_id,
+            task_phase: args.phase,
+            task_attempt: reservation.attempt,
+          },
+        );
+
+        if (outcome.success) {
+          const finish = await finishTaskStep(ctx, {
+            taskId: args.task_id,
+            stepRunId: reservation.step_run_id,
+            success: true,
+            commandId: outcome.commandId,
+          });
+          return mcpResult(body.id, {
+            success: true,
+            task_id: args.task_id,
+            step_id: args.step_id,
+            phase: args.phase,
+            tool: args.tool,
+            attempt: reservation.attempt,
+            task_status: finish.task_status,
+            command_id: outcome.commandId,
+            result: outcome.result,
+          }, false);
+        }
+
+        const fingerprint = await failureFingerprint(args.tool, outcome.error);
+        const finish = await finishTaskStep(ctx, {
+          taskId: args.task_id,
+          stepRunId: reservation.step_run_id,
+          success: false,
+          fingerprint,
+          errorCode: String(outcome.error?.errorCode ?? outcome.error?.code ?? "UNKNOWN_ERROR"),
+          commandId: outcome.commandId,
+        });
+
+        return mcpResult(body.id, {
+          success: false,
+          task_id: args.task_id,
+          step_id: args.step_id,
+          phase: args.phase,
+          tool: args.tool,
+          attempt: reservation.attempt,
+          task_status: finish.task_status,
+          repeated_failure_count: finish.repeated_failure_count,
+          command_id: outcome.commandId,
+          failure_fingerprint: fingerprint,
+          error: outcome.error,
+        }, true);
+      } catch (error) {
+        if (reservation?.accepted && reservation?.step_run_id) {
+          try {
+            const gatewayError = {
+              errorCode: "gateway_error",
+              message: error?.message ?? String(error),
+            };
+            await finishTaskStep(ctx, {
+              taskId: args?.task_id,
+              stepRunId: reservation.step_run_id,
+              success: false,
+              fingerprint: await failureFingerprint(String(args?.tool ?? "unknown"), gatewayError),
+              errorCode: "gateway_error",
+            });
+          } catch {
+            // Do not retry a PC action merely because task bookkeeping failed.
+          }
+        }
+        return mcpResult(body.id, {
+          success: false,
+          errorCode: "task_step_error",
+          message: error?.message ?? String(error),
+          retryable: false,
+        }, true);
+      }
     }
 
     if (!DEVICE_TOOLS.has(name)) {

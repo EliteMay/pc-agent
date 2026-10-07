@@ -60,3 +60,26 @@ The OAuth gateway is not the final authorization authority. Local Agent policy a
 ## OAuth development runner
 
 Gateway v6 exposes `run_development_command`. The request is structured as `program + args[] + cwd + timeout_ms`; arbitrary shell strings are not accepted. The Agent remains authoritative and currently allows only Git inspection commands, `npm test`, and `node --test`. Every development command requires explicit local Manager approval.
+
+
+## OAuth bounded task orchestration
+
+Gateway v7 adds four orchestration tools:
+
+- `task_begin`
+- `task_status`
+- `task_step`
+- `task_finish`
+
+A task is only a cloud-side execution budget and audit context. It does **not** grant any new Windows capability. Every `task_step` still dispatches exactly one existing Agent tool through the normal command queue. Tool Registry validation, allowed-root checks, sensitive-path rules, operation journaling, and local Manager approval remain authoritative.
+
+Task budgets bound:
+
+- maximum action steps
+- maximum retries
+- maximum total steps
+- maximum duration
+
+`observe` and `verify` phases may use read-only tools only. `act` phases must use locally governed write or development tools. A task cannot finish as `succeeded` unless its latest completed phase is a successful `verify` step.
+
+The gateway stores only task/step audit metadata. It intentionally does not duplicate full tool arguments or full tool results in the task tables. If the same normalized failure fingerprint occurs twice consecutively, the task transitions to `blocked` and further execution is rejected.

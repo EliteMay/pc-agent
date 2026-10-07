@@ -695,12 +695,25 @@ All existing read-only tools should work through the new registry before write s
 - automatically restore the previous Manager and startup registration on failure
 - publish release ZIP + SHA-256 assets from a version tag
 
+### v0.7 — Bounded Observe -> Plan -> Act -> Verify Foundation
+
+- cloud-side task records bound max actions, retries, total steps, and duration
+- ChatGPT remains the planner; the gateway only enforces the execution budget
+- each task step dispatches exactly one existing Agent tool
+- observe and verify phases are read-only
+- act phases use only existing locally governed write/development tools
+- Agent Tool Registry and local approval remain the final authorization boundary
+- task audit records omit full arguments and full results
+- repeated identical failure fingerprints block the task after the second consecutive occurrence
+- success requires a final successful verify step
+- task metadata is carried in command request_metadata for traceability
+- protocol version remains 1 because the Agent authorization envelope is unchanged
+
 ### Later
 
-- Observe -> Plan -> Act -> Verify loop
+- richer completion-evidence policies
 - approvals and risk UX
 - installer
-- stronger cryptographic device identity if warranted
 - stronger cryptographic device identity if warranted
 
 ## 26. Current Prototype Rule
