@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const VERSION = "1";
+const VERSION = "2";
 const MAX_POLL_MS = 15_000;
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
 
@@ -224,7 +224,7 @@ async function handleResult(req: Request, device: any) {
     .eq("command_id", commandId)
     .eq("operation_id", operationId)
     .eq("device_id", device.device_id)
-    .eq("status", "claimed")
+    .eq("status", "agent_claimed")
     .select("command_id")
     .maybeSingle();
 
