@@ -10,6 +10,7 @@ public sealed class MainForm : Form
     private readonly ManagerPaths _paths;
     private readonly ManagerConfigurationStore _configStore;
     private readonly AgentSupervisor _supervisor;
+    private readonly ManagerUpdateService _updateService;
     private readonly bool _backgroundStart;
 
     private readonly Label _agentValue = ValueLabel();
@@ -21,6 +22,7 @@ public sealed class MainForm : Form
     private readonly Button _stop = ActionButton("Stop");
     private readonly Button _restart = ActionButton("Restart");
     private readonly Button _diagnose = ActionButton("Diagnose");
+    private readonly Button _update = ActionButton("更新確認");
     private readonly Button _configure = ActionButton("設定");
     private readonly Button _emergency = ActionButton("EMERGENCY STOP");
     private readonly Button _resume = ActionButton("Emergency Stop解除");
@@ -32,11 +34,13 @@ public sealed class MainForm : Form
         ManagerPaths paths,
         ManagerConfigurationStore configStore,
         AgentSupervisor supervisor,
+        ManagerUpdateService updateService,
         bool backgroundStart)
     {
         _paths = paths;
         _configStore = configStore;
         _supervisor = supervisor;
+        _updateService = updateService;
         _backgroundStart = backgroundStart;
 
         Text = "PC Agent Manager";
@@ -86,7 +90,14 @@ public sealed class MainForm : Form
             AutoSize = true,
             Margin = new Padding(0, 20, 0, 0)
         };
-        actions.Controls.AddRange([_start, _stop, _restart, _diagnose, _configure]);
+        actions.Controls.AddRange([
+            _start,
+            _stop,
+            _restart,
+            _diagnose,
+            _update,
+            _configure
+        ]);
         root.Controls.Add(actions);
 
         _emergency.BackColor = Color.FromArgb(110, 25, 25);
@@ -126,6 +137,7 @@ public sealed class MainForm : Form
             Render(_supervisor.Snapshot);
         };
         _diagnose.Click += (_, _) => ShowDiagnostics();
+        _update.Click += async (_, _) => await CheckForUpdateAsync();
         _configure.Click += (_, _) => ShowConfiguration();
 
         _supervisor.SnapshotChanged += SupervisorOnSnapshotChanged;
@@ -397,6 +409,138 @@ public sealed class MainForm : Form
             snapshot.ProcessId is not null;
         _emergency.Enabled = !snapshot.EmergencyStopped;
         _resume.Enabled = snapshot.EmergencyStopped;
+    }
+
+
+    private async Task CheckForUpdateAsync()
+    {
+        if (_supervisor.Snapshot.EmergencyStopped)
+        {
+            MessageBox.Show(
+                this,
+                "Emergency Stop中は更新できません。先に解除してください。",
+                "PC Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (_approvalDialogOperationId is not null)
+        {
+            MessageBox.Show(
+                this,
+                "操作の確認待ちがあるため、更新は開始できません。",
+                "PC Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var stoppedForApply = false;
+        var originalText = _update.Text;
+        _update.Enabled = false;
+
+        try
+        {
+            _update.Text = "確認中...";
+
+            using var timeout = new CancellationTokenSource(
+                TimeSpan.FromMinutes(5));
+
+            var candidate = await _updateService.CheckLatestAsync(
+                timeout.Token);
+
+            if (candidate is null)
+            {
+                MessageBox.Show(
+                    this,
+                    $"最新版です。現在のManager: v{ManagerUpdateService.CurrentVersion}",
+                    "PC Agent",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            if (MessageBox.Show(
+                    this,
+                    $"v{candidate.Version} が利用できます。\n" +
+                    "GitHub Releaseからダウンロードし、SHA-256とbundle-checkを検証します。\n\n" +
+                    "更新を準備しますか？",
+                    "PC Agent - Update",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Information) != DialogResult.OK)
+            {
+                return;
+            }
+
+            _update.Text = "更新準備中...";
+            var staged = await _updateService.StageAsync(
+                candidate,
+                timeout.Token);
+
+            if (MessageBox.Show(
+                    this,
+                    $"v{staged.Version} の検証が完了しました。\n\n" +
+                    "Agentを一度停止して新版を起動します。新版がHEALTHYにならない場合は旧版へ自動で戻します。\n\n" +
+                    "今すぐ適用しますか？",
+                    "PC Agent - Update",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning) != DialogResult.OK)
+            {
+                return;
+            }
+
+            await _supervisor.StopAsync();
+            stoppedForApply = true;
+
+            var config = _configStore.Load();
+            _updateService.BeginApply(
+                staged,
+                config.AutoStartManager);
+
+            _allowExit = true;
+            _tray.Visible = false;
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+            MessageBox.Show(
+                this,
+                "更新処理がタイムアウトしました。現在のバージョンは変更されていません。",
+                "PC Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        catch (Exception ex)
+        {
+            if (stoppedForApply &&
+                !_supervisor.Snapshot.EmergencyStopped)
+            {
+                try
+                {
+                    await _supervisor.StartAsync();
+                }
+                catch
+                {
+                    // The original exception is more useful to the user.
+                }
+            }
+
+            MessageBox.Show(
+                this,
+                "更新処理に失敗しました。現在のバージョンを維持します。\n" + ex.Message,
+                "PC Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        finally
+        {
+            if (!IsDisposed)
+            {
+                _update.Text = originalText;
+                _update.Enabled = true;
+            }
+        }
     }
 
     private void ShowConfiguration()
