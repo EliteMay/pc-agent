@@ -50,7 +50,7 @@ The first production slice is the Agent safety foundation:
 - duplicate logical-operation suppression
 - interrupted operations recover as `UNKNOWN_OUTCOME`
 - SHA-256 result fingerprints without storing raw tool output
-- four bounded read-only tools: `system_info`, `list_directory`, `read_text_file`, `list_processes`
+- five bounded read-only tools: `ping`, `system_info`, `list_directory`, `read_text_file`, `list_processes`
 - validated command runtime: envelope -> Tool Registry -> operation journal -> tool execution
 - authenticated Supabase device queue client and result transport
 - cloud command envelope fields: device ID, tool version, protocol version, operation ID, expiry
@@ -68,19 +68,21 @@ The first production slice is the Agent safety foundation:
 - bounded v0.7 task orchestration in the OAuth gateway: task budgets, observe/act/verify phases, per-step trace metadata, retry caps, repeated-failure blocking, and verify-before-success completion
 - v0.8 repository-repair verification: non-zero development exits fail the operation, Git inspection is phase-aware, tests can be used as Verify steps with local approval, and successful step results are represented by SHA-256 evidence fingerprints
 - v0.8.1 read_text_file range contract: Agent supports gateway-advertised offset/maxBytes with next_offset/eof pagination metadata
-- v0.8.2 legacy retirement: ping is a first-class Agent Tool Registry operation on the v1 queue, so OAuth no longer needs the legacy queued/claimed transport
+- v0.8.2 legacy worker retirement: ping is a first-class Agent Tool Registry operation on the v1 queue and the standalone legacy worker/startup launcher are retired
+- v0.8.3 v1-only queue: legacy `queued`/`claimed` states and `claim_kaito_pc_command` are removed from production; old Edge Function slugs return a 410 retirement response
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
 
-The first read-only tool set is intentionally narrow:
+The read-only tool set is intentionally narrow:
 
+- `ping` returns a bounded v1 connectivity result and accepts no arguments.
 - `system_info` returns bounded OS/runtime facts and omits username/hostname.
 - `list_directory` canonicalizes the directory, refuses root escapes, does not follow child links, filters sensitive names, and caps returned entries.
 - `read_text_file` canonicalizes the file path, rejects sensitive paths, binary/non-UTF-8 content, non-files, and files above the configured byte limit.
 - `list_processes` invokes the fixed Windows `System32\\tasklist.exe` binary without a shell and returns only image name + PID.
 
-The production Supabase queue schema and the neutral `pc-agent-device` Edge Function are now wired to the Agent runtime. The existing relay tables remain temporarily in use for backward compatibility while new code and endpoints use neutral names.
+The production Supabase command table and the neutral `pc-agent-device` Edge Function are wired exclusively to the v1 Agent queue states. Historical completed/failed rows remain for audit, but new legacy `queued`/`claimed` states are rejected and the legacy claim RPC is removed.
 
 Filesystem writes are now limited to the three v0.4 safe-write tools and require explicit local approval in the Manager. Arbitrary user-supplied command execution remains intentionally **not implemented**. v0.5 only permits structured, policy-checked development commands.
 
