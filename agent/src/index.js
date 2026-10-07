@@ -1,5 +1,10 @@
 export { ToolRegistry, ToolRegistryError } from "./tools/tool-registry.js";
 export {
+  registerReadOnlyTools,
+  ReadOnlyToolError
+} from "./tools/read-only-tools.js";
+export { parseTasklistCsv } from "./tools/list-processes.js";
+export {
   assertPathWithinAllowedRoots,
   resolveExistingPathWithinAllowedRoots,
   resolveNewPathWithinAllowedRoots,
@@ -20,3 +25,4 @@ export {
   hashResult
 } from "./journal/operation-journal.js";
 export { executeOnce } from "./execution/execute-once.js";
+export { executeRegisteredCommand } from "./execution/agent-runtime.js";

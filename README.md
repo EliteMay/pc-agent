@@ -50,11 +50,20 @@ The first production slice is the Agent safety foundation:
 - duplicate logical-operation suppression
 - interrupted operations recover as `UNKNOWN_OUTCOME`
 - SHA-256 result fingerprints without storing raw tool output
+- four bounded read-only tools: `system_info`, `list_directory`, `read_text_file`, `list_processes`
+- validated command runtime: envelope -> Tool Registry -> operation journal -> tool execution
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
 
-Filesystem writes and arbitrary command execution are intentionally **not implemented yet**.
+The first read-only tool set is intentionally narrow:
+
+- `system_info` returns bounded OS/runtime facts and omits username/hostname.
+- `list_directory` canonicalizes the directory, refuses root escapes, does not follow child links, filters sensitive names, and caps returned entries.
+- `read_text_file` canonicalizes the file path, rejects sensitive paths, binary/non-UTF-8 content, non-files, and files above the configured byte limit.
+- `list_processes` invokes the fixed Windows `System32\\tasklist.exe` binary without a shell and returns only image name + PID.
+
+Filesystem writes and arbitrary user-supplied command execution are intentionally **not implemented yet**.
 
 Filesystem access must use the canonical path guards, not the lexical helper alone. For new files, callers must resolve the nearest existing parent and call write-time revalidation immediately before creating or replacing the file. Write tools remain intentionally disabled until the remaining safe-write checks are added.
 
