@@ -31,6 +31,6 @@ public static class StartupRegistration
         var executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("Manager executable path is unavailable.");
 
-        key.SetValue(ValueName, $"\\\"{executable}\\\" --background");
+        key.SetValue(ValueName, $"\"{executable}\" --background");
     }
 }
