@@ -26,3 +26,11 @@ export {
 } from "./journal/operation-journal.js";
 export { executeOnce } from "./execution/execute-once.js";
 export { executeRegisteredCommand } from "./execution/agent-runtime.js";
+
+export {
+  SupabaseQueueClient,
+  QueueClientError,
+  queueClientDefaults
+} from "./cloud/supabase-queue-client.js";
+export { runQueueOnce } from "./queue/run-queue-once.js";
+export { AgentRuntimeError } from "./execution/agent-runtime.js";
