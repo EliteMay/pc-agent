@@ -48,6 +48,37 @@ public sealed class ConfigurationDialog : Form
         _autoManager.Text = "Windowsログイン時にManagerを起動";
         _autoManager.Checked = existing.AutoStartManager;
 
+        var autoImport = CreateButton("既存Agent設定を自動検出");
+        autoImport.Click += (_, _) =>
+        {
+            var result = LegacyDeviceCredentialImporter
+                .CreateDefault()
+                .TryFind();
+
+            if (!result.Found)
+            {
+                MessageBox.Show(
+                    this,
+                    "既存のPC Agent設定は見つかりませんでした。",
+                    "PC Agent",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            _deviceId.Text = result.DeviceId;
+            _token.Text = result.DeviceToken;
+
+            MessageBox.Show(
+                this,
+                "既存のDevice情報を見つけました。保存を押せば暗号化して移行します。",
+                "PC Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        };
+
+        table.Controls.Add(autoImport);
+
         AddField(table, "Supabase Device Endpoint", _endpoint);
         AddField(table, "Device ID", _deviceId);
         AddField(table, "Device Token（暗号化して保存）", _token);
