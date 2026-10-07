@@ -1,4 +1,5 @@
 import { createListDirectoryTool } from "./list-directory.js";
+import { createPingTool } from "./ping.js";
 import { createListProcessesTool } from "./list-processes.js";
 import { createReadTextFileTool } from "./read-text-file.js";
 import { createSystemInfoTool } from "./system-info.js";
@@ -15,6 +16,7 @@ export function registerReadOnlyTools(registry, options = {}) {
     throw new TypeError("allowedRoots must contain at least one Windows directory.");
   }
 
+  registry.register(createPingTool());
   registry.register(createSystemInfoTool());
   registry.register(createListDirectoryTool({
     allowedRoots: [...allowedRoots],
