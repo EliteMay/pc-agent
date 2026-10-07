@@ -6,6 +6,8 @@ const ALLOWED_METHODS = new Set([
   "get_status",
   "get_health",
   "get_version",
+  "get_pending_approval",
+  "respond_approval",
   "prepare_shutdown",
   "reload_config"
 ]);
@@ -29,10 +31,20 @@ function encodeResponse(id, ok, payload) {
 export function createNamedPipeServer({
   pipeName,
   getHealth,
+  getPendingApproval,
+  onApprovalResponse,
   onPrepareShutdown
 }) {
   if (typeof getHealth !== "function") {
     throw new TypeError("getHealth must be a function.");
+  }
+
+  if (getPendingApproval !== undefined && typeof getPendingApproval !== "function") {
+    throw new TypeError("getPendingApproval must be a function when provided.");
+  }
+
+  if (onApprovalResponse !== undefined && typeof onApprovalResponse !== "function") {
+    throw new TypeError("onApprovalResponse must be a function when provided.");
   }
 
   const server = net.createServer((socket) => {
@@ -99,6 +111,24 @@ export function createNamedPipeServer({
               protocol_version: getHealth().protocol_version
             };
             break;
+          case "get_pending_approval":
+            result = getPendingApproval ? getPendingApproval() : null;
+            break;
+          case "respond_approval": {
+            if (!onApprovalResponse) {
+              result = {
+                accepted: false,
+                code: "APPROVAL_NOT_AVAILABLE"
+              };
+              break;
+            }
+
+            const operationId = String(request?.params?.operation_id ?? "");
+            const decision = String(request?.params?.decision ?? "");
+
+            result = onApprovalResponse(operationId, decision);
+            break;
+          }
           case "prepare_shutdown":
             result = { accepted: true };
             if (typeof onPrepareShutdown === "function") {
