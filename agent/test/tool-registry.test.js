@@ -9,6 +9,7 @@ test("registers and resolves a known tool", async () => {
     version: "1",
     capability: "system.inspect",
     risk: "low",
+    confirmation: "none",
     execute: async () => ({ ok: true })
   };
 
@@ -28,6 +29,7 @@ test("rejects duplicate tool names", () => {
     version: "1",
     capability: "system.inspect",
     risk: "low",
+    confirmation: "none",
     execute: async () => ({ ok: true })
   };
 
@@ -40,4 +42,36 @@ test("unknown tools fail closed", () => {
   const registry = new ToolRegistry();
 
   assert.throws(() => registry.require("does_not_exist"), /unknown tool/i);
+});
+
+
+test("confirmation metadata is mandatory and fail-closed", () => {
+  const registry = new ToolRegistry();
+
+  assert.throws(
+    () => registry.register({
+      name: "write_text_file",
+      version: "1",
+      capability: "file.write",
+      risk: "medium",
+      execute: async () => ({ ok: true })
+    }),
+    (error) => error?.code === "INVALID_TOOL_CONFIRMATION"
+  );
+});
+
+test("confirmation-required tools must provide an approval summary builder", () => {
+  const registry = new ToolRegistry();
+
+  assert.throws(
+    () => registry.register({
+      name: "write_text_file",
+      version: "1",
+      capability: "file.write",
+      risk: "medium",
+      confirmation: "required",
+      execute: async () => ({ ok: true })
+    }),
+    (error) => error?.code === "INVALID_APPROVAL_SUMMARY"
+  );
 });
