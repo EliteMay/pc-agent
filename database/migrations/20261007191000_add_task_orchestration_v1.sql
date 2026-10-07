@@ -277,15 +277,15 @@ begin
   returning kaito_pc_task_steps.step_run_id
   into v_step_run_id;
 
-  update public.kaito_pc_task_runs
+  update public.kaito_pc_task_runs as task
   set
-    step_count = step_count + 1,
-    action_count = action_count + case when p_phase = 'act' then 1 else 0 end,
-    retry_count = retry_count + v_retry_increment,
-    observe_count = observe_count + case when p_phase = 'observe' then 1 else 0 end,
-    verify_count = verify_count + case when p_phase = 'verify' then 1 else 0 end
-  where task_id = v_task.task_id
-  returning *
+    step_count = task.step_count + 1,
+    action_count = task.action_count + case when p_phase = 'act' then 1 else 0 end,
+    retry_count = task.retry_count + v_retry_increment,
+    observe_count = task.observe_count + case when p_phase = 'observe' then 1 else 0 end,
+    verify_count = task.verify_count + case when p_phase = 'verify' then 1 else 0 end
+  where task.task_id = v_task.task_id
+  returning task.*
   into v_task;
 
   return query
