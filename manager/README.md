@@ -18,6 +18,9 @@ The Manager is a normal-user .NET 8 WinForms application and provides:
 - diagnostics view and copy button
 - DPAPI-encrypted device-token storage
 - portable self-contained Windows build with a bundled Node.js runtime
+- local Update check that consumes versioned GitHub Release assets
+- SHA-256 verification and path-safe staged extraction before any switch
+- transactional bootstrap that health-checks the new bundled Agent and automatically starts the previous Manager on failure
 
 The Manager is only a supervisor. It does **not** implement Tool Registry, capability, path, risk, or remote-command authorization rules.
 

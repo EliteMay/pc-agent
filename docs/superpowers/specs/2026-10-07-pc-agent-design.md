@@ -679,12 +679,28 @@ All existing read-only tools should work through the new registry before write s
 - process-tree termination
 - subcommand policy
 
+### v0.6 — Transactional Updater / Rollback
+
+- check the latest stable GitHub Release
+- download a versioned Windows bundle and checksum
+- verify SHA-256 before extraction
+- reject archive path traversal / oversized archives
+- stage the new version beside the current version
+- run bundle-check before switching
+- stop the current Agent cleanly
+- use a bootstrap process outside the normal Manager mutex
+- run the candidate Manager in headless update-health-check mode
+- require the candidate bundled Agent to become HEALTHY and connected
+- launch the candidate Manager in background mode
+- automatically restore the previous Manager and startup registration on failure
+- publish release ZIP + SHA-256 assets from a version tag
+
 ### Later
 
 - Observe -> Plan -> Act -> Verify loop
 - approvals and risk UX
-- updater / rollback
 - installer
+- stronger cryptographic device identity if warranted
 - stronger cryptographic device identity if warranted
 
 ## 26. Current Prototype Rule
