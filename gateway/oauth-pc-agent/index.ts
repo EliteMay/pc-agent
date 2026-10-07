@@ -4,7 +4,7 @@ import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
-const VERSION = "7";
+const VERSION = "8";
 const MCP_WAIT_MS = 120000;
 
 const READ_ONLY_TOOLS = new Set([
@@ -190,7 +190,7 @@ const TOOLS = [
   {
     name: "task_step",
     title: "Run one bounded PC task step",
-    description: "Run exactly one existing PC Agent tool as an observe, act, or verify step under task budgets. Agent policy and local approval remain mandatory.",
+    description: "Run exactly one existing PC Agent tool under task budgets. Observe may use reads/git inspection; Act uses safe-write tools; Verify may use reads/git inspection/npm test/node --test. Agent policy and local approval remain mandatory.",
     inputSchema: {
       type: "object",
       properties: {
@@ -402,6 +402,23 @@ function requireUuid(value: unknown, name: string) {
   return value;
 }
 
+function isGitInspectionRequest(args: any) {
+  return args?.program === "git"
+    && Array.isArray(args?.args)
+    && ["status", "diff", "log", "rev-parse"].includes(args.args[0]);
+}
+
+function isVerificationDevelopmentRequest(args: any) {
+  if (isGitInspectionRequest(args)) return true;
+  if (args?.program === "npm" && Array.isArray(args?.args)) {
+    return args.args.length === 1 && args.args[0] === "test";
+  }
+  if (args?.program === "node" && Array.isArray(args?.args)) {
+    return args.args.length === 1 && args.args[0] === "--test";
+  }
+  return false;
+}
+
 function validateTaskStepArgs(args: any) {
   requireUuid(args?.task_id, "task_id");
   if (typeof args?.step_id !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(args.step_id)) {
@@ -409,16 +426,39 @@ function validateTaskStepArgs(args: any) {
   }
   if (!TASK_PHASES.has(args?.phase)) throw new Error("phase is invalid");
   if (!DEVICE_TOOLS.has(args?.tool)) throw new Error("tool is not allowed");
-  if ((args.phase === "observe" || args.phase === "verify") && !READ_ONLY_TOOLS.has(args.tool)) {
-    throw new Error("observe and verify phases may use read-only tools only");
-  }
-  if (args.phase === "act" && READ_ONLY_TOOLS.has(args.tool)) {
-    throw new Error("act phase must use a locally governed write or development tool");
-  }
   if (!args?.arguments || typeof args.arguments !== "object" || Array.isArray(args.arguments)) {
     throw new Error("arguments must be an object");
   }
+
   validateToolArgs(args.tool, args.arguments);
+
+  if (args.phase === "observe") {
+    const allowed =
+      READ_ONLY_TOOLS.has(args.tool)
+      || (
+        args.tool === "run_development_command"
+        && isGitInspectionRequest(args.arguments)
+      );
+    if (!allowed) {
+      throw new Error("observe may use read-only tools or approved git inspection only");
+    }
+  }
+
+  if (args.phase === "verify") {
+    const allowed =
+      READ_ONLY_TOOLS.has(args.tool)
+      || (
+        args.tool === "run_development_command"
+        && isVerificationDevelopmentRequest(args.arguments)
+      );
+    if (!allowed) {
+      throw new Error("verify may use read-only tools, git inspection, npm test, or node --test only");
+    }
+  }
+
+  if (args.phase === "act" && !WRITE_TOOLS.has(args.tool)) {
+    throw new Error("act must use an existing locally approved safe-write tool");
+  }
 }
 
 function taskPublicView(row: any) {
@@ -444,6 +484,7 @@ function taskPublicView(row: any) {
     },
     last_phase: row.last_phase,
     last_step_success: row.last_step_success,
+    last_result_fingerprint: row.last_result_fingerprint,
     repeated_failure_count: row.repeated_failure_count,
     blocked_reason: row.blocked_reason,
     started_at: row.started_at,
@@ -468,6 +509,10 @@ async function failureFingerprint(toolName: string, error: any) {
     .trim()
     .slice(0, 512);
   return sha256Hex(toolName + "|" + code + "|" + message);
+}
+
+async function resultFingerprint(result: unknown) {
+  return sha256Hex(JSON.stringify(result ?? null));
 }
 
 async function beginTask(ctx: any, args: any) {
@@ -562,18 +607,20 @@ async function finishTaskStep(ctx: any, {
   taskId,
   stepRunId,
   success,
+  resultFingerprintValue = null,
   fingerprint = null,
   errorCode = null,
   commandId = null,
 }: any) {
   const userId = requireUuid(ctx?.userClaims?.id, "OAuth user id");
   const { data, error } = await ctx.supabaseAdmin.rpc(
-    "finish_pc_agent_task_step_v1",
+    "finish_pc_agent_task_step_v2",
     {
       p_task_id: taskId,
       p_user_id: userId,
       p_step_run_id: stepRunId,
       p_success: success,
+      p_result_fingerprint: resultFingerprintValue,
       p_failure_fingerprint: fingerprint,
       p_error_code: errorCode,
       p_command_id: commandId,
@@ -593,7 +640,7 @@ async function finishTask(ctx: any, args: any) {
     throw new Error("summary must be at most 2000 characters");
   }
   const { data, error } = await ctx.supabaseAdmin.rpc(
-    "finish_pc_agent_task_v1",
+    "finish_pc_agent_task_v2",
     {
       p_task_id: args.task_id,
       p_user_id: userId,
@@ -603,8 +650,19 @@ async function finishTask(ctx: any, args: any) {
   );
   if (error) throw error;
   const row = data?.[0];
-  if (!row?.accepted) return { success: false, reason: row?.reason ?? "task_finish_rejected", status: row?.task_status ?? null };
-  return { success: true, status: row.task_status };
+  if (!row?.accepted) {
+    return {
+      success: false,
+      reason: row?.reason ?? "task_finish_rejected",
+      status: row?.task_status ?? null,
+      verification_fingerprint: row?.verification_fingerprint ?? null,
+    };
+  }
+  return {
+    success: true,
+    status: row.task_status,
+    verification_fingerprint: row.verification_fingerprint ?? null,
+  };
 }
 
 async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetadata: Record<string, unknown> = {}) {
@@ -890,12 +948,22 @@ const handler = async (req: Request, ctx: any) => {
         );
 
         if (outcome.success) {
+          const evidence = await resultFingerprint(outcome.result);
           const finish = await finishTaskStep(ctx, {
             taskId: args.task_id,
             stepRunId: reservation.step_run_id,
             success: true,
+            resultFingerprintValue: evidence,
             commandId: outcome.commandId,
           });
+          if (!finish?.accepted) {
+            return mcpResult(body.id, {
+              success: false,
+              errorCode: finish?.reason ?? "task_step_finish_rejected",
+              taskStatus: finish?.task_status ?? null,
+              retryable: false,
+            }, true);
+          }
           return mcpResult(body.id, {
             success: true,
             task_id: args.task_id,
@@ -905,6 +973,7 @@ const handler = async (req: Request, ctx: any) => {
             attempt: reservation.attempt,
             task_status: finish.task_status,
             command_id: outcome.commandId,
+            result_fingerprint: evidence,
             result: outcome.result,
           }, false);
         }

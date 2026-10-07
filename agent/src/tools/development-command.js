@@ -632,11 +632,22 @@ async function executeBoundedProcess({
         return;
       }
 
+      const exitCode =
+        Number.isInteger(code)
+          ? code
+          : null;
+
+      if (exitCode !== 0) {
+        reject(new DevelopmentCommandError(
+          "Development command exited with code " +
+            String(exitCode) + ".",
+          "DEVELOPMENT_COMMAND_NONZERO_EXIT"
+        ));
+        return;
+      }
+
       resolve(Object.freeze({
-        exit_code:
-          Number.isInteger(code)
-            ? code
-            : null,
+        exit_code: exitCode,
         signal: signal ?? null,
         stdout,
         stderr,

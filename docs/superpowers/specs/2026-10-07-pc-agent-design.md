@@ -709,6 +709,17 @@ All existing read-only tools should work through the new registry before write s
 - task metadata is carried in command request_metadata for traceability
 - protocol version remains 1 because the Agent authorization envelope is unchanged
 
+### v0.8 — Repository Repair Workflow
+
+- treat non-zero development-command exit codes as failed Agent tool executions
+- allow approved Git inspection during Observe
+- restrict Act to existing safe-write tools
+- allow approved Git inspection, npm test, and node --test during Verify
+- retain explicit local approval for every Development Runner invocation
+- persist SHA-256 result evidence rather than duplicating full output in task audit tables
+- require final Verify evidence before task success
+- validate the flow on a real repository: inspect -> edit -> test -> verify
+
 ### Later
 
 - richer completion-evidence policies

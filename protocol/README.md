@@ -77,3 +77,16 @@ Task orchestration is a gateway concern and does not change protocol version 1. 
 The Agent treats this metadata as audit context only. It does not use task metadata to authorize a tool. Tool Registry, capability policy, path policy, command expiry, operation deduplication, and local approval are enforced exactly as for non-task commands.
 
 Gateway task state enforces bounded execution and blocks repeated identical failure fingerprints. A task may be marked `succeeded` only after a successful `verify` phase.
+
+
+## v0.8 verification evidence
+
+Successful orchestrated task steps persist only a SHA-256 fingerprint of the structured tool result:
+
+```text
+result_fingerprint = sha256(JSON structured result)
+```
+
+Full stdout, stderr, file contents, and other tool results remain in the existing command result path and are intentionally not copied into task audit tables.
+
+For repository workflows, a development command with a non-zero exit code is a failed Agent tool execution. Therefore a failing `npm test`, `node --test`, or Git validation command cannot count as successful verification.
