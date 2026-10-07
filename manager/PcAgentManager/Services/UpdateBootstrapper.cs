@@ -306,10 +306,17 @@ public static class UpdateBootstrapper
                 state.AutoStartManager,
                 state.PreviousExecutablePath);
 
-            if (File.Exists(state.PreviousExecutablePath))
+            if (!File.Exists(state.PreviousExecutablePath))
             {
-                _ = StartBackground(
+                throw new FileNotFoundException(
+                    "Previous Manager executable is unavailable for rollback.",
                     state.PreviousExecutablePath);
+            }
+
+            if (StartBackground(state.PreviousExecutablePath) is null)
+            {
+                throw new InvalidOperationException(
+                    "Previous Manager could not be restarted during rollback.");
             }
 
             WriteState(
