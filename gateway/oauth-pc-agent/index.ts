@@ -4,7 +4,7 @@ import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
-const VERSION = "4";
+const VERSION = "5";
 const MCP_WAIT_MS = 45000;
 
 const READ_ONLY_TOOLS = new Set([
@@ -18,6 +18,7 @@ const READ_ONLY_TOOLS = new Set([
 const WRITE_TOOLS = new Set([
   "create_directory",
   "write_text_file",
+  "edit_text_file",
 ]);
 
 const DEVICE_TOOLS = new Set([
@@ -123,6 +124,23 @@ const TOOLS = [
         },
       },
       required: ["path", "text", "expected_sha256"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "edit_text_file",
+    title: "Edit one exact text occurrence",
+    description: "Replace exactly one expected text occurrence in a UTF-8 file inside an allowed PC Agent root. Requires the current SHA-256 and explicit local approval.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", minLength: 1 },
+        old_text: { type: "string", minLength: 1, maxLength: 131072 },
+        new_text: { type: "string", maxLength: 131072 },
+        expected_sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
+      },
+      required: ["path", "old_text", "new_text", "expected_sha256"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -246,6 +264,30 @@ function validateToolArgs(name: string, args: any) {
       )
     ) {
       throw new Error("expected_sha256 must be null or a 64-character SHA-256 hex string");
+    }
+  }
+
+  if (name === "edit_text_file") {
+    if (!args || typeof args.path !== "string" || !args.path.trim()) {
+      throw new Error("path is required");
+    }
+    if (typeof args.old_text !== "string" || args.old_text.length === 0) {
+      throw new Error("old_text is required");
+    }
+    if (typeof args.new_text !== "string") {
+      throw new Error("new_text is required");
+    }
+    if (new TextEncoder().encode(args.old_text).length > 131072) {
+      throw new Error("old_text must be at most 131072 UTF-8 bytes");
+    }
+    if (new TextEncoder().encode(args.new_text).length > 131072) {
+      throw new Error("new_text must be at most 131072 UTF-8 bytes");
+    }
+    if (
+      typeof args.expected_sha256 !== "string"
+      || !/^[A-Fa-f0-9]{64}$/.test(args.expected_sha256)
+    ) {
+      throw new Error("expected_sha256 must be a 64-character SHA-256 hex string");
     }
   }
 }
