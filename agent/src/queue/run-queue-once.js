@@ -23,7 +23,8 @@ export async function runQueueOnce({
   registry,
   journal,
   now = new Date(),
-  waitMs
+  waitMs,
+  onCommand
 }) {
   if (!client || typeof client.poll !== "function" || typeof client.submitResult !== "function") {
     throw new TypeError("client must provide poll() and submitResult().");
@@ -35,6 +36,14 @@ export async function runQueueOnce({
 
   if (!command) {
     return Object.freeze({ status: "IDLE" });
+  }
+
+  if (onCommand !== undefined && typeof onCommand !== "function") {
+    throw new TypeError("onCommand must be a function when provided.");
+  }
+
+  if (onCommand) {
+    onCommand(command);
   }
 
   let execution;
