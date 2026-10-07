@@ -1,7 +1,11 @@
 export { ToolRegistry, ToolRegistryError } from "./tools/tool-registry.js";
 export {
   assertPathWithinAllowedRoots,
-  isSensitivePath
+  resolveExistingPathWithinAllowedRoots,
+  resolveNewPathWithinAllowedRoots,
+  revalidateNewPathBeforeWrite,
+  isSensitivePath,
+  PathPolicyError
 } from "./security/path-policy.js";
 export { Capabilities, PolicyDecision } from "./security/capabilities.js";
 export {
