@@ -107,3 +107,19 @@ The Agent now implements the range arguments already exposed by the OAuth schema
 - `maxBytes`: 1..65536 bytes per call
 
 The result includes `offset`, `bytes`, `next_offset`, and `eof` so callers can page through bounded UTF-8 text safely. The Agent still rejects files above its configured maximum text-file size and blocks sensitive paths.
+
+
+## OAuth v1 ping migration — v8.2
+
+`ping` now uses the same production v1 command path as every other Windows Agent tool:
+
+```text
+OAuth Gateway
+  -> agent_queued
+  -> pc-agent-device
+  -> Agent Tool Registry: ping
+  -> agent_claimed
+  -> completed
+```
+
+The OAuth gateway no longer creates legacy `queued`/`claimed` ping commands. This removes the final runtime dependency on the old standalone `kaito-device-agent.mjs` worker.
