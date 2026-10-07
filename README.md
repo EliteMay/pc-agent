@@ -67,6 +67,7 @@ The first production slice is the Agent safety foundation:
 - transactional v0.6 Manager updater using GitHub Releases, SHA-256 verification, safe ZIP extraction, staged bundle-check, new-Agent health validation, and automatic rollback to the previous Manager when verification fails
 - bounded v0.7 task orchestration in the OAuth gateway: task budgets, observe/act/verify phases, per-step trace metadata, retry caps, repeated-failure blocking, and verify-before-success completion
 - v0.8 repository-repair verification: non-zero development exits fail the operation, Git inspection is phase-aware, tests can be used as Verify steps with local approval, and successful step results are represented by SHA-256 evidence fingerprints
+- v0.8.1 read_text_file range contract: Agent supports gateway-advertised offset/maxBytes with next_offset/eof pagination metadata
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
