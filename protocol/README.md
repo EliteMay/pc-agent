@@ -20,3 +20,15 @@ Cloud commands use an envelope containing at minimum:
 `operation_id` identifies the logical operation across retries.
 
 Expired, malformed, and unsupported-version commands are rejected before tool lookup or execution.
+
+## Duplicate operation handling
+
+The local Agent journal treats `operation_id` as the idempotency key.
+
+- First sighting: create `RUNNING`, then execute.
+- Success: transition to `SUCCEEDED` and store only a SHA-256 result fingerprint.
+- Tool failure: transition to `FAILED` with an error code.
+- Duplicate `operation_id`: do not execute again.
+- Agent restart with a leftover `RUNNING` record: transition it to `UNKNOWN_OUTCOME` and do not auto-retry.
+
+This intentionally prefers a safe unknown state over potentially repeating a side effect.
