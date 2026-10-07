@@ -16,7 +16,9 @@ function command(overrides = {}) {
   return {
     command_id: "cmd-read-1",
     operation_id: "op-read-1",
+    device_id: "device-1",
     tool: "read_text_file",
+    tool_version: "1",
     protocol_version: 1,
     created_at: "2026-10-07T00:00:00.000Z",
     expires_at: "2099-10-07T00:00:00.000Z",
@@ -86,6 +88,40 @@ test("runtime rejects an unknown tool before execution", async () => {
         now: new Date("2026-10-07T01:00:00.000Z")
       }),
       (error) => error?.code === "UNKNOWN_TOOL"
+    );
+
+    assert.equal(journal.getOperation("op-read-1"), null);
+  } finally {
+    journal.close();
+  }
+});
+
+
+test("runtime rejects a tool version mismatch before journaling", async () => {
+  const registry = new ToolRegistry();
+  const journal = new OperationJournal(":memory:");
+
+  try {
+    registry.register({
+      name: "system_info",
+      version: "2",
+      capability: "system.inspect",
+      risk: "low",
+      execute: async () => ({ ok: true })
+    });
+
+    await assert.rejects(
+      executeRegisteredCommand({
+        registry,
+        journal,
+        command: command({
+          tool: "system_info",
+          tool_version: "1",
+          args: {}
+        }),
+        now: new Date("2026-10-07T01:00:00.000Z")
+      }),
+      (error) => error?.code === "TOOL_VERSION_MISMATCH"
     );
 
     assert.equal(journal.getOperation("op-read-1"), null);
