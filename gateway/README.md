@@ -55,3 +55,8 @@ Both commands are routed to the production `agent_queued` queue and require expl
 `write_text_file` requires `expected_sha256` when replacing an existing file. `edit_text_file` requires the current SHA-256 and exactly one matching `old_text` occurrence before it can build the approved replacement. New files must use `expected_sha256: null`. The Agent still enforces allowed roots, sensitive-path blocking, optimistic concurrency, backup, atomic replacement, operation journaling, and read-back hash verification.
 
 The OAuth gateway is not the final authorization authority. Local Agent policy and local Manager approval remain mandatory.
+
+
+## OAuth development runner
+
+Gateway v6 exposes `run_development_command`. The request is structured as `program + args[] + cwd + timeout_ms`; arbitrary shell strings are not accepted. The Agent remains authoritative and currently allows only Git inspection commands, `npm test`, and `node --test`. Every development command requires explicit local Manager approval.
