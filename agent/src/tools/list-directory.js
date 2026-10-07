@@ -35,6 +35,7 @@ export function createListDirectoryTool({
     version: "1",
     capability: Capabilities.FILE_READ,
     risk: "low",
+    confirmation: "none",
     description: "List names and entry types inside an allowed directory without following child links.",
     async execute(args) {
       requireWindows();
