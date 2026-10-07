@@ -22,6 +22,23 @@ function requireTool(tool) {
   }
 }
 
+function recordToolFailure(journal, operationId, error) {
+  const errorCode = typeof error?.code === "string" && error.code.length > 0
+    ? error.code
+    : "TOOL_FAILED";
+
+  try {
+    journal.markFailed(operationId, errorCode);
+  } catch (journalError) {
+    if (!(journalError instanceof OperationJournalError)) {
+      throw journalError;
+    }
+
+    // Leave RUNNING in place if the failure record cannot be persisted.
+    // On restart it becomes UNKNOWN_OUTCOME, preventing blind re-execution.
+  }
+}
+
 export async function executeOnce({
   journal,
   command,
@@ -48,35 +65,26 @@ export async function executeOnce({
     });
   }
 
+  let result;
+
   try {
-    const result = await tool.execute(command.args, {
+    result = await tool.execute(command.args, {
       command
     });
-
-    const operation = journal.markSucceeded(command.operation_id, result);
-
-    return Object.freeze({
-      executed: true,
-      duplicate: false,
-      result,
-      operation
-    });
   } catch (error) {
-    const errorCode = typeof error?.code === "string" && error.code.length > 0
-      ? error.code
-      : "TOOL_FAILED";
-
-    try {
-      journal.markFailed(command.operation_id, errorCode);
-    } catch (journalError) {
-      if (!(journalError instanceof OperationJournalError)) {
-        throw journalError;
-      }
-
-      // If journaling the failure fails, leave RUNNING in place. On restart it
-      // becomes UNKNOWN_OUTCOME, which prevents blind re-execution.
-    }
-
+    recordToolFailure(journal, command.operation_id, error);
     throw error;
   }
+
+  // Important: do not treat a journal persistence error as a tool failure.
+  // The tool has already executed. If persisting SUCCEEDED fails, the journal
+  // stays RUNNING/UNKNOWN_OUTCOME so a retry cannot execute the side effect again.
+  const operation = journal.markSucceeded(command.operation_id, result);
+
+  return Object.freeze({
+    executed: true,
+    duplicate: false,
+    result,
+    operation
+  });
 }
