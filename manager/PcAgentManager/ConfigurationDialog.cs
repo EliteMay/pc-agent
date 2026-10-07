@@ -10,6 +10,7 @@ public sealed class ConfigurationDialog : Form
     private readonly TextBox _roots = new();
     private readonly CheckBox _autoAgent = new();
     private readonly CheckBox _autoManager = new();
+    private readonly CheckBox _gameSafety = new();
     private readonly AgentConfiguration _existing;
 
     public AgentConfiguration? Result { get; private set; }
@@ -47,6 +48,8 @@ public sealed class ConfigurationDialog : Form
         _autoAgent.Checked = existing.AutoStartAgent;
         _autoManager.Text = "Windowsログイン時にManagerを起動";
         _autoManager.Checked = existing.AutoStartManager;
+        _gameSafety.Text = "Game Safety: VALORANT中はAgentを自動停止";
+        _gameSafety.Checked = existing.PauseAgentDuringProtectedGames;
 
         var autoImport = CreateButton("既存Agent設定を自動検出");
         autoImport.Click += (_, _) =>
@@ -85,6 +88,7 @@ public sealed class ConfigurationDialog : Form
         AddField(table, "Allowed Roots（1行1フォルダ）", _roots);
         table.Controls.Add(_autoAgent);
         table.Controls.Add(_autoManager);
+        table.Controls.Add(_gameSafety);
 
         var buttons = new FlowLayoutPanel
         {
@@ -148,7 +152,8 @@ public sealed class ConfigurationDialog : Form
                 : _token.Text.Trim(),
             AllowedRoots = roots,
             AutoStartAgent = _autoAgent.Checked,
-            AutoStartManager = _autoManager.Checked
+            AutoStartManager = _autoManager.Checked,
+            PauseAgentDuringProtectedGames = _gameSafety.Checked
         };
 
         var validation = AgentConfigurationValidator.Validate(config);

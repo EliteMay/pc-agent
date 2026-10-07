@@ -17,6 +17,8 @@ public sealed class AgentConfiguration
     public bool AutoStartAgent { get; set; } = true;
 
     public bool AutoStartManager { get; set; } = false;
+
+    public bool PauseAgentDuringProtectedGames { get; set; } = true;
 }
 
 public sealed record ConfigurationValidationResult(

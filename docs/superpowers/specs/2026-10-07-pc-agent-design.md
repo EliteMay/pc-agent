@@ -749,6 +749,17 @@ All existing read-only tools should work through the new registry before write s
 - expose both tools through OAuth and Task Observe/Verify
 - validate against the real D:\\AI workspace before release
 
+### v0.10 — Game Safety
+
+- add a Manager-only protected-game detector based on exact process names
+- enable Game Safety by default with a local setting
+- pause the Agent when VALORANT is detected
+- resume only if the Agent was running or configured to auto-start before the game
+- never resume after an explicit manual Stop
+- block Agent Start/Restart and Manager update apply while the protected game is running
+- keep detection isolated from game memory, Vanguard, input, rendering, or injection APIs
+- test the state-transition policy separately from process detection
+
 ### Later
 
 - richer completion-evidence policies

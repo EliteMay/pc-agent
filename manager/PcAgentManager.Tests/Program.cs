@@ -107,6 +107,72 @@ Run("Configuration validation requires endpoint, device, token and roots", () =>
     Require(ok.IsValid, string.Join("; ", ok.Errors));
 });
 
+Run("Game Safety recognizes only protected game process names", () =>
+{
+    Require(
+        ProtectedGameDetector.IsProtectedProcessName("VALORANT-Win64-Shipping.exe"),
+        "shipping process should match");
+    Require(
+        ProtectedGameDetector.IsProtectedProcessName("valorant"),
+        "process matching should be case-insensitive");
+    Require(
+        !ProtectedGameDetector.IsProtectedProcessName("RiotClientServices.exe"),
+        "launcher alone should not trigger game safety");
+    Require(
+        !ProtectedGameDetector.IsProtectedProcessName("notepad.exe"),
+        "unrelated process must not match");
+});
+
+Run("Game Safety resumes only when Agent was intended to run", () =>
+{
+    var state = new GameSafetyState();
+
+    var enterRunning = state.Observe(
+        gameRunning: true,
+        agentRunning: true);
+
+    Require(enterRunning.EnteredGame, "should enter game state");
+    Require(enterRunning.ShouldPauseAgent, "running Agent should be paused");
+    Require(state.ResumeAgentAfterGame, "running Agent should resume later");
+
+    var exitRunning = state.Observe(
+        gameRunning: false,
+        agentRunning: false);
+
+    Require(exitRunning.ExitedGame, "should leave game state");
+    Require(exitRunning.ShouldResumeAgent, "Agent should resume after game");
+
+    var enterStopped = state.Observe(
+        gameRunning: true,
+        agentRunning: false);
+
+    Require(!enterStopped.ShouldPauseAgent, "stopped Agent needs no pause");
+    Require(!state.ResumeAgentAfterGame, "manually stopped Agent must stay stopped");
+
+    state.RequestResumeAfterGame();
+    Require(state.ResumeAgentAfterGame, "explicit start request during game should queue resume");
+    state.CancelResumeAfterGame();
+    Require(!state.ResumeAgentAfterGame, "manual stop should cancel queued resume");
+});
+
+Run("Game Safety can defer configured auto-start until game exit", () =>
+{
+    var state = new GameSafetyState();
+    var enter = state.Observe(
+        gameRunning: true,
+        agentRunning: false,
+        resumeWhenGameEndsIfNotRunning: true);
+
+    Require(!enter.ShouldPauseAgent, "no running Agent to pause");
+    Require(state.ResumeAgentAfterGame, "configured auto-start should resume after game");
+
+    var exit = state.Observe(
+        gameRunning: false,
+        agentRunning: false);
+
+    Require(exit.ShouldResumeAgent, "deferred auto-start should run after game");
+});
+
 Run("Emergency stop persists until explicitly cleared", () =>
 {
     var root = Path.Combine(Path.GetTempPath(), "PcAgentManagerTests", Guid.NewGuid().ToString("N"));
