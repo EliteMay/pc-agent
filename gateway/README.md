@@ -97,3 +97,13 @@ Gateway v8 tightens task semantics for real repository repair work:
 - A task cannot finish as `succeeded` without a final successful Verify step carrying result evidence.
 
 The Agent now treats every non-zero development command exit code as a tool failure. This makes test failure and Git validation failure visible to the task loop instead of allowing a failed command to satisfy completion criteria.
+
+
+## OAuth read range contract — v8.1
+
+The Agent now implements the range arguments already exposed by the OAuth schema for `read_text_file`:
+
+- `offset`: non-negative byte offset, default 0
+- `maxBytes`: 1..65536 bytes per call
+
+The result includes `offset`, `bytes`, `next_offset`, and `eof` so callers can page through bounded UTF-8 text safely. The Agent still rejects files above its configured maximum text-file size and blocks sensitive paths.

@@ -164,6 +164,78 @@ test("read_text_file reads UTF-8 text inside an allowed root", {
   }
 });
 
+test("read_text_file supports bounded offset byte ranges", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const fixture = createFixture();
+  const file = path.join(fixture.root, "range.txt");
+
+  try {
+    writeFileSync(file, "hello world", "utf8");
+
+    const first = await fixture.registry
+      .require("read_text_file")
+      .execute({
+        path: file,
+        offset: 0,
+        maxBytes: 5
+      });
+
+    assert.equal(first.text, "hello");
+    assert.equal(first.offset, 0);
+    assert.equal(first.bytes, 5);
+    assert.equal(first.next_offset, 5);
+    assert.equal(first.eof, false);
+
+    const second = await fixture.registry
+      .require("read_text_file")
+      .execute({
+        path: file,
+        offset: first.next_offset,
+        maxBytes: 6
+      });
+
+    assert.equal(second.text, " world");
+    assert.equal(second.offset, 5);
+    assert.equal(second.bytes, 6);
+    assert.equal(second.next_offset, 11);
+    assert.equal(second.eof, true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("read_text_file rejects invalid range arguments", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const fixture = createFixture();
+  const file = path.join(fixture.root, "range.txt");
+
+  try {
+    writeFileSync(file, "hello", "utf8");
+
+    await assert.rejects(
+      fixture.registry.require("read_text_file").execute({
+        path: file,
+        offset: -1
+      }),
+      (error) => error instanceof ReadOnlyToolError
+        && error.code === "INVALID_ARGUMENTS"
+    );
+
+    await assert.rejects(
+      fixture.registry.require("read_text_file").execute({
+        path: file,
+        maxBytes: 65537
+      }),
+      (error) => error instanceof ReadOnlyToolError
+        && error.code === "INVALID_ARGUMENTS"
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("read_text_file denies sensitive files even when they are in an allowed root", {
   skip: process.platform !== "win32"
 }, async () => {
