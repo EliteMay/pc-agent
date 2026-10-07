@@ -11,6 +11,7 @@ export function createSystemInfoTool() {
     version: "1",
     capability: Capabilities.SYSTEM_INSPECT,
     risk: "low",
+    confirmation: "none",
     description: "Return bounded, non-identifying operating system and runtime facts.",
     async execute(args) {
       requireWindows();
