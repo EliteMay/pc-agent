@@ -4,7 +4,7 @@ import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
-const VERSION = "8.1";
+const VERSION = "8.2";
 const MCP_WAIT_MS = 120000;
 
 const READ_ONLY_TOOLS = new Set([
@@ -49,7 +49,7 @@ const TOOLS = [
   {
     name: "ping",
     title: "Ping paired Windows PC",
-    description: "Send a read-only ping through the existing Kaito command queue to the paired Windows PC Agent.",
+    description: "Send a read-only ping through the production v1 command queue to the paired Windows PC Agent.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -675,12 +675,11 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetada
   const device = await newestDevice(ctx);
   if (!device) throw new Error("No paired PC Agent device is registered.");
 
-  const useAgentV1 = toolName !== "ping";
   const isWriteTool = WRITE_TOOLS.has(toolName);
   const isDevelopmentTool = DEVELOPMENT_TOOLS.has(toolName);
   const requiresLocalApproval = isWriteTool || isDevelopmentTool;
-  const queuedStatus = useAgentV1 ? "agent_queued" : "queued";
-  const claimedStatus = useAgentV1 ? "agent_claimed" : "claimed";
+  const queuedStatus = "agent_queued";
+  const claimedStatus = "agent_claimed";
 
   const { data: created, error: createError } = await ctx.supabaseAdmin
     .from("kaito_pc_commands")
@@ -693,7 +692,7 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetada
       request_metadata: {
         ...taskMetadata,
         source: "oauth-gateway",
-        transport: useAgentV1 ? "pc-agent-v1" : "legacy",
+        transport: "pc-agent-v1",
         local_approval_required: requiresLocalApproval
       },
       status: queuedStatus,
