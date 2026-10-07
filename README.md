@@ -50,7 +50,7 @@ The first production slice is the Agent safety foundation:
 - duplicate logical-operation suppression
 - interrupted operations recover as `UNKNOWN_OUTCOME`
 - SHA-256 result fingerprints without storing raw tool output
-- five bounded read-only tools: `ping`, `system_info`, `list_directory`, `read_text_file`, `list_processes`
+- seven bounded read-only tools: `ping`, `system_info`, `list_directory`, `read_text_file`, `find_paths`, `search_text`, `list_processes`
 - validated command runtime: envelope -> Tool Registry -> operation journal -> tool execution
 - authenticated Supabase device queue client and result transport
 - cloud command envelope fields: device ID, tool version, protocol version, operation ID, expiry
@@ -70,6 +70,7 @@ The first production slice is the Agent safety foundation:
 - v0.8.1 read_text_file range contract: Agent supports gateway-advertised offset/maxBytes with next_offset/eof pagination metadata
 - v0.8.2 legacy worker retirement: ping is a first-class Agent Tool Registry operation on the v1 queue and the standalone legacy worker/startup launcher are retired
 - v0.8.3 v1-only queue: legacy `queued`/`claimed` states and `claim_kaito_pc_command` are removed from production; old Edge Function slugs return a 410 retirement response
+- v0.9 workspace discovery: bounded `find_paths` and `search_text` tools let ChatGPT locate projects/code under allowed roots without Desktop Commander; dependency/sensitive/link traversal remains blocked
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
@@ -80,6 +81,8 @@ The read-only tool set is intentionally narrow:
 - `system_info` returns bounded OS/runtime facts and omits username/hostname.
 - `list_directory` canonicalizes the directory, refuses root escapes, does not follow child links, filters sensitive names, and caps returned entries.
 - `read_text_file` canonicalizes the file path, rejects sensitive paths, binary/non-UTF-8 content, non-files, and files above the configured byte limit.
+- `find_paths` performs bounded recursive name search, skips sensitive paths/common dependency metadata, and never follows links.
+- `search_text` performs bounded literal search in UTF-8 files, revalidates each path before opening it, and skips sensitive, binary, oversized, dependency, and linked content.
 - `list_processes` invokes the fixed Windows `System32\\tasklist.exe` binary without a shell and returns only image name + PID.
 
 The production Supabase command table and the neutral `pc-agent-device` Edge Function are wired exclusively to the v1 Agent queue states. Historical completed/failed rows remain for audit, but new legacy `queued`/`claimed` states are rejected and the legacy claim RPC is removed.

@@ -133,3 +133,15 @@ The OAuth gateway no longer creates legacy `queued`/`claimed` ping commands. Thi
 Gateway v8.3 assumes the production database is v1-only. Every Windows tool, including `ping`, uses `agent_queued` / `agent_claimed`. The database rejects legacy queue states and exposes only `claim_pc_agent_command_v1` for device claiming.
 
 The old gateway slugs are deployed from `gateway/retired-pc-agent/index.ts` and return HTTP 410 with the current OAuth gateway location. They do not poll, enqueue, pair, update, or execute PC commands.
+
+
+## OAuth workspace discovery — v9
+
+Gateway v9 exposes two additional read-only Agent tools:
+
+- `find_paths`: bounded recursive filename/directory-name search under an allowed root.
+- `search_text`: bounded literal text search across UTF-8 files under an allowed root.
+
+Both tools are eligible for Task Observe and Verify phases because they grant no mutation capability. The Windows Agent remains authoritative for allowed-root enforcement, sensitive-path filtering, link avoidance, scan/result budgets, and file-size limits. `search_text` revalidates each file path immediately before opening it so a path changed during the scan cannot escape the configured roots.
+
+Common dependency/metadata directories such as `.git`, `node_modules`, `.next`, and `coverage` are not traversed. Full file contents are not returned; text search returns bounded matching line snippets only.
