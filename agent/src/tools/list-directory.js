@@ -8,10 +8,39 @@ import {
 import {
   ReadOnlyToolError,
   assertNonSensitivePath,
-  requirePathArg,
+  requireObjectArgs,
   requirePositiveInteger,
   requireWindows
 } from "./read-only-common.js";
+
+function parseListDirectoryRequest(args, configuredMaximum) {
+  requireObjectArgs(args, ["path", "maxEntries"]);
+
+  if (typeof args.path !== "string" || args.path.trim().length === 0) {
+    throw new ReadOnlyToolError(
+      "path must be a non-empty string.",
+      "INVALID_ARGUMENTS"
+    );
+  }
+
+  const requestedMaximum = args.maxEntries ?? configuredMaximum;
+  if (
+    !Number.isSafeInteger(requestedMaximum)
+    || requestedMaximum < 1
+    || requestedMaximum > configuredMaximum
+  ) {
+    throw new ReadOnlyToolError(
+      "maxEntries must be an integer between 1 and "
+        + configuredMaximum + ".",
+      "INVALID_ARGUMENTS"
+    );
+  }
+
+  return Object.freeze({
+    path: args.path,
+    maxEntries: requestedMaximum
+  });
+}
 
 function entryType(entry) {
   if (entry.isDirectory()) return "directory";
@@ -39,7 +68,8 @@ export function createListDirectoryTool({
     description: "List names and entry types inside an allowed directory without following child links.",
     async execute(args) {
       requireWindows();
-      const requestedPath = requirePathArg(args);
+      const request = parseListDirectoryRequest(args, maxEntries);
+      const requestedPath = request.path;
       const canonicalPath = resolveExistingPathWithinAllowedRoots(
         requestedPath,
         allowedRoots
@@ -82,7 +112,7 @@ export function createListDirectoryTool({
             continue;
           }
 
-          if (entries.length >= maxEntries) {
+          if (entries.length >= request.maxEntries) {
             truncated = true;
             break;
           }
@@ -107,8 +137,14 @@ export function createListDirectoryTool({
         path: canonicalPath,
         entries: Object.freeze(entries),
         filtered_sensitive_entries: filteredSensitiveEntries,
+        max_entries: request.maxEntries,
         truncated
       });
     }
   };
 }
+
+
+export const listDirectoryInternals = Object.freeze({
+  parseListDirectoryRequest
+});
