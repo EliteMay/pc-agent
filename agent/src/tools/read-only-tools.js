@@ -1,7 +1,9 @@
+import { createFindPathsTool } from "./find-paths.js";
 import { createListDirectoryTool } from "./list-directory.js";
 import { createPingTool } from "./ping.js";
 import { createListProcessesTool } from "./list-processes.js";
 import { createReadTextFileTool } from "./read-text-file.js";
+import { createSearchTextTool } from "./search-text.js";
 import { createSystemInfoTool } from "./system-info.js";
 export { ReadOnlyToolError } from "./read-only-common.js";
 
@@ -23,6 +25,13 @@ export function registerReadOnlyTools(registry, options = {}) {
     maxDirectoryEntries: options.maxDirectoryEntries
   }));
   registry.register(createReadTextFileTool({
+    allowedRoots: [...allowedRoots],
+    maxTextFileBytes: options.maxTextFileBytes
+  }));
+  registry.register(createFindPathsTool({
+    allowedRoots: [...allowedRoots]
+  }));
+  registry.register(createSearchTextTool({
     allowedRoots: [...allowedRoots],
     maxTextFileBytes: options.maxTextFileBytes
   }));
