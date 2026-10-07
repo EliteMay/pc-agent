@@ -19,6 +19,14 @@ public static class StartupRegistration
 
     public static void SetEnabled(bool enabled)
     {
+        var executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Manager executable path is unavailable.");
+
+        SetExecutable(enabled, executable);
+    }
+
+    public static void SetExecutable(bool enabled, string executable)
+    {
         using var key = Registry.CurrentUser.CreateSubKey(RunKey, writable: true)
             ?? throw new InvalidOperationException("Unable to open Windows startup registry key.");
 
@@ -28,9 +36,15 @@ public static class StartupRegistration
             return;
         }
 
-        var executable = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Manager executable path is unavailable.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(executable);
 
-        key.SetValue(ValueName, $"\"{executable}\" --background");
+        var fullPath = Path.GetFullPath(executable);
+        if (!Path.IsPathFullyQualified(fullPath) || !File.Exists(fullPath))
+        {
+            throw new InvalidOperationException(
+                "Manager startup executable is missing or not absolute.");
+        }
+
+        key.SetValue(ValueName, $"\"{fullPath}\" --background");
     }
 }
