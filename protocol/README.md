@@ -58,3 +58,22 @@ The local Agent journal treats `operation_id` as the idempotency key.
 If a duplicate delivery arrives after the original result is no longer available locally, the Agent reports `DUPLICATE_OPERATION` instead of re-running the tool.
 
 This intentionally prefers a safe unknown/duplicate state over potentially repeating a side effect.
+
+
+## v0.7 task orchestration metadata
+
+Task orchestration is a gateway concern and does not change protocol version 1. A task step still produces one ordinary command envelope. The gateway adds bounded trace metadata in `request_metadata`:
+
+```json
+{
+  "task_id": "44444444-4444-4444-8444-444444444444",
+  "task_step_id": "verify-build",
+  "task_step_run_id": "55555555-5555-4555-8555-555555555555",
+  "task_phase": "verify",
+  "task_attempt": 1
+}
+```
+
+The Agent treats this metadata as audit context only. It does not use task metadata to authorize a tool. Tool Registry, capability policy, path policy, command expiry, operation deduplication, and local approval are enforced exactly as for non-task commands.
+
+Gateway task state enforces bounded execution and blocks repeated identical failure fingerprints. A task may be marked `succeeded` only after a successful `verify` phase.
