@@ -127,6 +127,89 @@ Run("Emergency stop persists until explicitly cleared", () =>
     }
 });
 
+
+
+Run("Legacy device credentials are discovered and imported without manual entry", () =>
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "PcAgentManagerLegacyImportTests",
+        Guid.NewGuid().ToString("N"));
+
+    var searchRoot = Path.Combine(root, "config");
+    var legacyDirectory = Path.Combine(searchRoot, "legacy-agent");
+    Directory.CreateDirectory(legacyDirectory);
+
+    try
+    {
+        var deviceId = "11111111-1111-4111-8111-111111111111";
+        var token = "legacy-device-token-that-is-long-enough";
+
+        File.WriteAllText(
+            Path.Combine(legacyDirectory, "device.json"),
+            $"""
+            {
+              "relayUrl": "https://vtnwbgejlaqpnwmlzbjy.supabase.co/functions/v1/legacy-gateway",
+              "deviceId": "{{deviceId}}",
+              "deviceToken": "{{token}}",
+              "deviceName": "Windows PC"
+            }
+            """);
+
+        var importer = new LegacyDeviceCredentialImporter(
+            [searchRoot],
+            expectedSupabaseProjectId: "vtnwbgejlaqpnwmlzbjy");
+
+        var result = importer.TryFind();
+
+        Require(result.Found, "legacy credentials should be found");
+        Equal(deviceId, result.DeviceId, "device id");
+        Equal(token, result.DeviceToken, "device token");
+        Require(
+            result.SourcePath?.EndsWith("device.json", StringComparison.OrdinalIgnoreCase) == true,
+            "source path should point to the legacy device.json");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Legacy importer ignores unrelated device.json files", () =>
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "PcAgentManagerLegacyImportTests",
+        Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        File.WriteAllText(
+            Path.Combine(root, "device.json"),
+            """
+            {
+              "deviceId": "11111111-1111-4111-8111-111111111111",
+              "deviceToken": "this-token-is-long-but-not-from-our-supabase",
+              "relayUrl": "https://example.test/device"
+            }
+            """);
+
+        var importer = new LegacyDeviceCredentialImporter(
+            [root],
+            expectedSupabaseProjectId: "vtnwbgejlaqpnwmlzbjy");
+
+        var result = importer.TryFind();
+
+        Require(!result.Found, "unrelated device config must not be imported");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
