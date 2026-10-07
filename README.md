@@ -41,7 +41,13 @@ The first production slice is the Agent safety foundation:
 - sensitive-path detection
 - command envelope validation
 - `operation_id` and `expires_at` validation
+- persistent SQLite operation journal
+- duplicate logical-operation suppression
+- interrupted operations recover as `UNKNOWN_OUTCOME`
+- SHA-256 result fingerprints without storing raw tool output
 - Windows CI
+
+The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
 
 Filesystem writes and arbitrary command execution are intentionally **not implemented yet**.
 
