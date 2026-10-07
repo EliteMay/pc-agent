@@ -156,6 +156,39 @@ test("list_directory uses canonical path policy and filters sensitive entries", 
   }
 });
 
+test("list_directory honors the bounded per-call maxEntries contract", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const fixture = createFixture({ maxDirectoryEntries: 10 });
+
+  try {
+    writeFileSync(path.join(fixture.root, "a.txt"), "a", "utf8");
+    writeFileSync(path.join(fixture.root, "b.txt"), "b", "utf8");
+
+    const result = await fixture.registry
+      .require("list_directory")
+      .execute({
+        path: fixture.root,
+        maxEntries: 1
+      });
+
+    assert.equal(result.entries.length, 1);
+    assert.equal(result.max_entries, 1);
+    assert.equal(result.truncated, true);
+
+    await assert.rejects(
+      fixture.registry.require("list_directory").execute({
+        path: fixture.root,
+        maxEntries: 11
+      }),
+      (error) => error instanceof ReadOnlyToolError
+        && error.code === "INVALID_ARGUMENTS"
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("list_directory rejects a junction that escapes the allowed root", {
   skip: process.platform !== "win32"
 }, async () => {
