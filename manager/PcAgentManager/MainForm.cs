@@ -26,6 +26,7 @@ public sealed class MainForm : Form
     private readonly Button _resume = ActionButton("Emergency Stop解除");
     private readonly NotifyIcon _tray = new();
     private bool _allowExit;
+    private string? _approvalDialogOperationId;
 
     public MainForm(
         ManagerPaths paths,
@@ -128,6 +129,7 @@ public sealed class MainForm : Form
         _configure.Click += (_, _) => ShowConfiguration();
 
         _supervisor.SnapshotChanged += SupervisorOnSnapshotChanged;
+        _supervisor.PendingApprovalChanged += SupervisorOnPendingApprovalChanged;
 
         ConfigureTray();
         FormClosing += MainFormClosing;
@@ -194,6 +196,185 @@ public sealed class MainForm : Form
         else
         {
             Render(snapshot);
+        }
+    }
+
+    private void SupervisorOnPendingApprovalChanged(PendingApprovalSnapshot? pending)
+    {
+        if (IsDisposed || pending is null)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => SupervisorOnPendingApprovalChanged(pending));
+            return;
+        }
+
+        if (string.Equals(
+                _approvalDialogOperationId,
+                pending.OperationId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _ = ShowApprovalDialogAsync(pending);
+    }
+
+    private async Task ShowApprovalDialogAsync(PendingApprovalSnapshot pending)
+    {
+        _approvalDialogOperationId = pending.OperationId;
+
+        try
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+
+            var summaryText = pending.Summary.ValueKind is
+                System.Text.Json.JsonValueKind.Undefined or
+                System.Text.Json.JsonValueKind.Null
+                ? "(詳細なし)"
+                : System.Text.Json.JsonSerializer.Serialize(
+                    pending.Summary,
+                    new System.Text.Json.JsonSerializerOptions
+                    {
+                        WriteIndented = true
+                    });
+
+            using var dialog = new Form
+            {
+                Text = "PC Agent - 操作の確認",
+                Size = new Size(640, 520),
+                MinimumSize = new Size(560, 440),
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = Color.FromArgb(18, 18, 18),
+                ForeColor = Color.Gainsboro,
+                TopMost = true
+            };
+
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(20),
+                ColumnCount = 1,
+                RowCount = 6
+            };
+
+            root.Controls.Add(new Label
+            {
+                Text = "PCに変更を加える操作が要求されています。",
+                AutoSize = true,
+                Font = new Font(Font.FontFamily, 13, FontStyle.Bold),
+                Margin = new Padding(0, 0, 0, 12)
+            });
+
+            root.Controls.Add(new Label
+            {
+                Text = $"Tool: {pending.Tool}    Risk: {pending.Risk}",
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 8)
+            });
+
+            var details = new TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Both,
+                Dock = DockStyle.Fill,
+                Text = summaryText,
+                BackColor = Color.FromArgb(28, 28, 28),
+                ForeColor = Color.WhiteSmoke,
+                Font = new Font("Consolas", 10)
+            };
+            root.Controls.Add(details);
+
+            root.Controls.Add(new Label
+            {
+                Text = "内容を確認して、許可する場合だけ「許可」を押してください。",
+                AutoSize = true,
+                Margin = new Padding(0, 10, 0, 10)
+            });
+
+            var buttons = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                AutoSize = true
+            };
+
+            var approve = ActionButton("許可");
+            var deny = ActionButton("拒否");
+            deny.BackColor = Color.FromArgb(90, 30, 30);
+
+            buttons.Controls.Add(approve);
+            buttons.Controls.Add(deny);
+            root.Controls.Add(buttons);
+            dialog.Controls.Add(root);
+
+            bool approved = false;
+            approve.Click += (_, _) =>
+            {
+                approved = true;
+                dialog.DialogResult = DialogResult.OK;
+                dialog.Close();
+            };
+            deny.Click += (_, _) =>
+            {
+                approved = false;
+                dialog.DialogResult = DialogResult.Cancel;
+                dialog.Close();
+            };
+
+            dialog.FormClosing += (_, e) =>
+            {
+                if (dialog.DialogResult == DialogResult.None)
+                {
+                    approved = false;
+                    dialog.DialogResult = DialogResult.Cancel;
+                }
+            };
+
+            _tray.ShowBalloonTip(
+                5000,
+                "PC Agent",
+                "PCへの変更操作が確認待ちです。",
+                ToolTipIcon.Warning);
+
+            dialog.ShowDialog(this);
+
+            using var responseCts = new CancellationTokenSource(
+                TimeSpan.FromSeconds(3));
+
+            var accepted = await _supervisor.RespondApprovalAsync(
+                pending.OperationId,
+                approved,
+                responseCts.Token);
+
+            if (!accepted)
+            {
+                MessageBox.Show(
+                    this,
+                    "確認結果をAgentへ送れませんでした。操作は実行されません。",
+                    "PC Agent",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                "確認処理でエラーが発生しました。操作は許可されていません。\n" + ex.Message,
+                "PC Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _approvalDialogOperationId = null;
         }
     }
 
