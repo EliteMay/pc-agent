@@ -56,7 +56,7 @@ test("safe write tools require local confirmation", () => {
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ["create_directory", "write_text_file"]
+      ["create_directory", "edit_text_file", "write_text_file"]
     );
 
     for (const tool of tools) {
@@ -256,6 +256,160 @@ test("write_text_file rejects sensitive and oversized targets", async () => {
       (error) =>
         error instanceof SafeWriteToolError
         && error.code === "FILE_TOO_LARGE"
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+
+test("edit_text_file replaces exactly one expected text occurrence", async () => {
+  const fixture = createFixture();
+  const target = path.join(
+    fixture.root,
+    "edit.txt"
+  );
+
+  try {
+    writeFileSync(
+      target,
+      "alpha\nbeta\ngamma\n",
+      "utf8"
+    );
+
+    const tool = fixture.registry.require(
+      "edit_text_file"
+    );
+
+    const summary = tool.approvalSummary({
+      path: target,
+      old_text: "beta",
+      new_text: "BETA",
+      expected_sha256: hashText(
+        "alpha\nbeta\ngamma\n"
+      )
+    });
+
+    assert.equal(
+      summary.action,
+      "edit_text_file"
+    );
+    assert.equal(summary.replacements, 1);
+
+    const result = await tool.execute({
+      path: target,
+      old_text: "beta",
+      new_text: "BETA",
+      expected_sha256: hashText(
+        "alpha\nbeta\ngamma\n"
+      )
+    });
+
+    assert.equal(
+      readFileSync(target, "utf8"),
+      "alpha\nBETA\ngamma\n"
+    );
+    assert.equal(result.replacements, 1);
+    assert.equal(result.verified, true);
+    assert.ok(result.backup_path);
+    assert.equal(
+      readFileSync(result.backup_path, "utf8"),
+      "alpha\nbeta\ngamma\n"
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("edit_text_file rejects zero or ambiguous matches", async () => {
+  const fixture = createFixture();
+  const target = path.join(
+    fixture.root,
+    "ambiguous.txt"
+  );
+  const current = "same\nsame\n";
+
+  try {
+    writeFileSync(target, current, "utf8");
+    const tool = fixture.registry.require(
+      "edit_text_file"
+    );
+
+    await assert.rejects(
+      tool.execute({
+        path: target,
+        old_text: "missing",
+        new_text: "new",
+        expected_sha256: hashText(current)
+      }),
+      (error) =>
+        error instanceof SafeWriteToolError
+        && error.code === "EDIT_TEXT_NOT_FOUND"
+    );
+
+    await assert.rejects(
+      tool.execute({
+        path: target,
+        old_text: "same",
+        new_text: "new",
+        expected_sha256: hashText(current)
+      }),
+      (error) =>
+        error instanceof SafeWriteToolError
+        && error.code === "EDIT_TEXT_AMBIGUOUS"
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("edit_text_file rejects stale hashes and invalid UTF-8", async () => {
+  const fixture = createFixture();
+  const stale = path.join(
+    fixture.root,
+    "stale.txt"
+  );
+  const binary = path.join(
+    fixture.root,
+    "binary.txt"
+  );
+
+  try {
+    writeFileSync(stale, "current", "utf8");
+
+    await assert.rejects(
+      fixture.registry
+        .require("edit_text_file")
+        .execute({
+          path: stale,
+          old_text: "current",
+          new_text: "updated",
+          expected_sha256: "0".repeat(64)
+        }),
+      (error) =>
+        error instanceof SafeWriteToolError
+        && error.code === "EXPECTED_HASH_MISMATCH"
+    );
+
+    writeFileSync(
+      binary,
+      Buffer.from([0xff, 0xfe, 0xfd])
+    );
+
+    await assert.rejects(
+      fixture.registry
+        .require("edit_text_file")
+        .execute({
+          path: binary,
+          old_text: "x",
+          new_text: "y",
+          expected_sha256: createHash("sha256")
+            .update(Buffer.from([0xff, 0xfe, 0xfd]))
+            .digest("hex")
+        }),
+      (error) =>
+        error instanceof SafeWriteToolError
+        && error.code === "INVALID_UTF8"
     );
   } finally {
     fixture.cleanup();

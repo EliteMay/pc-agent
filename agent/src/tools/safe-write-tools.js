@@ -1,5 +1,6 @@
 import { createCreateDirectoryTool } from "./create-directory.js";
 import { createWriteTextFileTool } from "./write-text-file.js";
+import { createEditTextFileTool } from "./edit-text-file.js";
 export { SafeWriteToolError } from "./safe-write-common.js";
 
 export function registerSafeWriteTools(registry, options = {}) {
@@ -20,6 +21,11 @@ export function registerSafeWriteTools(registry, options = {}) {
   }));
 
   registry.register(createWriteTextFileTool({
+    allowedRoots: [...allowedRoots],
+    maxTextFileBytes: options.maxTextFileBytes
+  }));
+
+  registry.register(createEditTextFileTool({
     allowedRoots: [...allowedRoots],
     maxTextFileBytes: options.maxTextFileBytes
   }));
