@@ -36,17 +36,19 @@ function createFixture(options = {}) {
   };
 }
 
-test("registers the five read-only tools including v1 ping", () => {
+test("registers the seven bounded read-only tools", () => {
   const fixture = createFixture();
 
   try {
     assert.deepEqual(
       fixture.registry.list().map((tool) => tool.name).sort(),
       [
+        "find_paths",
         "list_directory",
         "list_processes",
         "ping",
         "read_text_file",
+        "search_text",
         "system_info"
       ]
     );
@@ -57,6 +59,14 @@ test("registers the five read-only tools including v1 ping", () => {
     );
     assert.equal(
       fixture.registry.require("read_text_file").capability,
+      "file.read"
+    );
+    assert.equal(
+      fixture.registry.require("find_paths").capability,
+      "file.read"
+    );
+    assert.equal(
+      fixture.registry.require("search_text").capability,
       "file.read"
     );
     assert.equal(
@@ -319,6 +329,209 @@ test("read_text_file rejects binary content and oversized files", {
     );
   } finally {
     smallLimitFixture.cleanup();
+  }
+});
+
+test("find_paths searches names recursively while skipping sensitive and heavy paths", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const fixture = createFixture();
+
+  try {
+    const src = path.join(fixture.root, "src");
+    const nested = path.join(src, "features");
+    const dependency = path.join(fixture.root, "node_modules", "pkg");
+
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(path.join(nested, "AppController.js"), "export {};", "utf8");
+    writeFileSync(path.join(dependency, "AppHidden.js"), "hidden", "utf8");
+    writeFileSync(path.join(fixture.root, ".env"), "APP_SECRET=x", "utf8");
+
+    const result = await fixture.registry
+      .require("find_paths")
+      .execute({
+        path: fixture.root,
+        query: "app",
+        max_depth: 4,
+        max_results: 20
+      });
+
+    assert.deepEqual(
+      result.matches.map((match) => match.name),
+      ["AppController.js"]
+    );
+    assert.ok(result.scanned_entries > 0);
+    assert.ok(result.skipped_heavy_directories >= 1);
+    assert.ok(result.filtered_sensitive_entries >= 1);
+    assert.equal(result.truncated, false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("find_paths does not follow a junction outside the allowed root", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pc-agent-find-junction-"));
+  const root = path.join(directory, "Allowed");
+  const outside = path.join(directory, "Outside");
+  const junction = path.join(root, "escape");
+  const registry = new ToolRegistry();
+
+  try {
+    mkdirSync(root, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(outside, "target-secret.txt"), "secret", "utf8");
+    symlinkSync(outside, junction, "junction");
+
+    registerReadOnlyTools(registry, { allowedRoots: [root] });
+
+    const result = await registry
+      .require("find_paths")
+      .execute({
+        path: root,
+        query: "target-secret",
+        max_depth: 4
+      });
+
+    assert.equal(result.matches.length, 0);
+    assert.ok(result.skipped_links >= 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("search_text finds literal UTF-8 text without scanning sensitive, dependency, binary, or oversized files", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const fixture = createFixture({ maxTextFileBytes: 128 });
+
+  try {
+    const src = path.join(fixture.root, "src");
+    const dependency = path.join(fixture.root, "node_modules", "pkg");
+    mkdirSync(src, { recursive: true });
+    mkdirSync(dependency, { recursive: true });
+
+    writeFileSync(
+      path.join(src, "one.js"),
+      "const marker = 'WorkspaceTarget';\n",
+      "utf8"
+    );
+    writeFileSync(
+      path.join(src, "two.txt"),
+      "workspacetarget appears here\n",
+      "utf8"
+    );
+    writeFileSync(
+      path.join(dependency, "hidden.js"),
+      "WorkspaceTarget dependency\n",
+      "utf8"
+    );
+    writeFileSync(
+      path.join(fixture.root, ".env"),
+      "WorkspaceTarget=secret\n",
+      "utf8"
+    );
+    writeFileSync(
+      path.join(src, "binary.bin"),
+      Buffer.from([0x57, 0x6f, 0x72, 0x00, 0x6b])
+    );
+    writeFileSync(
+      path.join(src, "large.txt"),
+      "WorkspaceTarget ".repeat(20),
+      "utf8"
+    );
+
+    const result = await fixture.registry
+      .require("search_text")
+      .execute({
+        path: fixture.root,
+        query: "workspacetarget",
+        max_depth: 4,
+        max_results: 20
+      });
+
+    assert.deepEqual(
+      result.matches.map((match) => path.win32.basename(match.path)).sort(),
+      ["one.js", "two.txt"]
+    );
+    assert.ok(result.matches.every((match) => Number.isInteger(match.line)));
+    assert.ok(result.skipped_heavy_directories >= 1);
+    assert.ok(result.filtered_sensitive_entries >= 1);
+    assert.ok(result.skipped_binary_or_invalid_utf8 >= 1);
+    assert.ok(result.skipped_large_files >= 1);
+    assert.equal(result.truncated, false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("search_text supports case sensitivity and bounded result counts", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const fixture = createFixture();
+
+  try {
+    writeFileSync(
+      path.join(fixture.root, "case.txt"),
+      "Needle\nneedle\nneedle\n",
+      "utf8"
+    );
+
+    const sensitive = await fixture.registry
+      .require("search_text")
+      .execute({
+        path: fixture.root,
+        query: "Needle",
+        case_sensitive: true,
+        max_results: 10
+      });
+
+    assert.equal(sensitive.matches.length, 1);
+    assert.equal(sensitive.matches[0].line, 1);
+
+    const bounded = await fixture.registry
+      .require("search_text")
+      .execute({
+        path: fixture.root,
+        query: "needle",
+        max_results: 2
+      });
+
+    assert.equal(bounded.matches.length, 2);
+    assert.equal(bounded.truncated, true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("workspace discovery rejects invalid search bounds", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const fixture = createFixture();
+
+  try {
+    await assert.rejects(
+      fixture.registry.require("find_paths").execute({
+        path: fixture.root,
+        query: "x",
+        max_depth: 9
+      }),
+      (error) => error instanceof ReadOnlyToolError
+        && error.code === "INVALID_ARGUMENTS"
+    );
+
+    await assert.rejects(
+      fixture.registry.require("search_text").execute({
+        path: fixture.root,
+        query: "bad\nquery"
+      }),
+      (error) => error instanceof ReadOnlyToolError
+        && error.code === "INVALID_ARGUMENTS"
+    );
+  } finally {
+    fixture.cleanup();
   }
 });
 
