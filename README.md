@@ -38,6 +38,11 @@ The first production slice is the Agent safety foundation:
 - fail-closed Tool Registry
 - capability constants
 - Windows allowed-root lexical boundary checks
+- filesystem-backed canonical path enforcement with `realpathSync.native`
+- junction / symlink / reparse-point escape rejection
+- nearest-existing-parent resolution for new paths
+- write-time parent revalidation for TOCTOU defense
+- Windows reserved-name / alternate-data-stream rejection
 - sensitive-path detection
 - command envelope validation
 - `operation_id` and `expires_at` validation
@@ -51,6 +56,6 @@ The journal prevents a repeated `operation_id` from executing twice, even after 
 
 Filesystem writes and arbitrary command execution are intentionally **not implemented yet**.
 
-Before write tools are enabled, path checks will also canonicalize existing paths with the Windows filesystem (`realpath`) and defend against junction/reparse-point escapes.
+Filesystem access must use the canonical path guards, not the lexical helper alone. For new files, callers must resolve the nearest existing parent and call write-time revalidation immediately before creating or replacing the file. Write tools remain intentionally disabled until the remaining safe-write checks are added.
 
 See `docs/superpowers/specs/2026-10-07-pc-agent-design.md` for the system design.
