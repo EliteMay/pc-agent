@@ -1,6 +1,7 @@
 const NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const VERSION_PATTERN = /^[0-9]+(?:\.[0-9]+){0,2}$/;
 const VALID_RISKS = new Set(["low", "medium", "high"]);
+const VALID_CONFIRMATIONS = new Set(["none", "required"]);
 
 export class ToolRegistryError extends Error {
   constructor(message, code = "TOOL_REGISTRY_ERROR") {
@@ -29,6 +30,23 @@ function assertToolDefinition(tool) {
 
   if (!VALID_RISKS.has(tool.risk)) {
     throw new ToolRegistryError("Tool risk must be low, medium, or high.", "INVALID_TOOL_RISK");
+  }
+
+  if (!VALID_CONFIRMATIONS.has(tool.confirmation)) {
+    throw new ToolRegistryError(
+      "Tool confirmation must be none or required.",
+      "INVALID_TOOL_CONFIRMATION"
+    );
+  }
+
+  if (
+    tool.confirmation === "required"
+    && typeof tool.approvalSummary !== "function"
+  ) {
+    throw new ToolRegistryError(
+      "Confirmation-required tools must provide approvalSummary(args).",
+      "INVALID_APPROVAL_SUMMARY"
+    );
   }
 
   if (typeof tool.execute !== "function") {

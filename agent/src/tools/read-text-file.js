@@ -90,6 +90,7 @@ export function createReadTextFileTool({
     version: "1",
     capability: Capabilities.FILE_READ,
     risk: "low",
+    confirmation: "none",
     description: "Read a bounded UTF-8 text file inside an allowed root.",
     async execute(args) {
       requireWindows();
