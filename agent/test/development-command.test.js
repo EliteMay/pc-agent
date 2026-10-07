@@ -204,6 +204,59 @@ test("development command tool is confirmation-gated", {
   }
 });
 
+test("development runner treats a non-zero test exit as failure", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const root = mkdtempSync(
+    path.join(tmpdir(), "pc-agent-dev-runner-fail-")
+  );
+  const testFile = path.join(
+    root,
+    "failing.test.js"
+  );
+
+  writeFileSync(
+    testFile,
+    `import test from "node:test";
+import assert from "node:assert/strict";
+test("fails", () => assert.equal(1, 2));
+`,
+    "utf8"
+  );
+
+  try {
+    const tool = createDevelopmentCommandTool({
+      allowedRoots: [root],
+      executableResolver(program) {
+        if (program === "node") {
+          return {
+            executable: process.execPath,
+            prefixArgs: []
+          };
+        }
+        throw new Error("unexpected program");
+      }
+    });
+
+    await assert.rejects(
+      tool.execute({
+        program: "node",
+        args: ["--test"],
+        cwd: root,
+        timeout_ms: 30000
+      }),
+      (error) =>
+        error instanceof DevelopmentCommandError
+        && error.code === "DEVELOPMENT_COMMAND_NONZERO_EXIT"
+    );
+  } finally {
+    rmSync(root, {
+      recursive: true,
+      force: true
+    });
+  }
+});
+
 test("development runner executes a bounded node --test command without a shell", {
   skip: process.platform !== "win32"
 }, async () => {
