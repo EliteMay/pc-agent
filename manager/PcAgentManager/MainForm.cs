@@ -14,6 +14,7 @@ public sealed class MainForm : Form
     private readonly bool _backgroundStart;
 
     private readonly Label _agentValue = ValueLabel();
+    private readonly Label _gameSafetyValue = ValueLabel();
     private readonly Label _supabaseValue = ValueLabel();
     private readonly Label _heartbeatValue = ValueLabel();
     private readonly Label _versionValue = ValueLabel();
@@ -27,7 +28,14 @@ public sealed class MainForm : Form
     private readonly Button _emergency = ActionButton("EMERGENCY STOP");
     private readonly Button _resume = ActionButton("Emergency Stop解除");
     private readonly NotifyIcon _tray = new();
+    private readonly System.Windows.Forms.Timer _gameSafetyTimer = new()
+    {
+        Interval = 5000
+    };
+    private readonly GameSafetyState _gameSafetyState = new();
     private bool _allowExit;
+    private bool _gameSafetyEnabled;
+    private bool _gameSafetyCheckInProgress;
     private string? _approvalDialogOperationId;
 
     public MainForm(
@@ -78,6 +86,7 @@ public sealed class MainForm : Form
         status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         AddStatus(status, "Agent", _agentValue);
+        AddStatus(status, "Game Safety", _gameSafetyValue);
         AddStatus(status, "Supabase", _supabaseValue);
         AddStatus(status, "Heartbeat", _heartbeatValue);
         AddStatus(status, "Version", _versionValue);
@@ -116,9 +125,9 @@ public sealed class MainForm : Form
 
         Controls.Add(root);
 
-        _start.Click += async (_, _) => await _supervisor.StartAsync();
-        _stop.Click += async (_, _) => await _supervisor.StopAsync();
-        _restart.Click += async (_, _) => await _supervisor.RestartAsync();
+        _start.Click += async (_, _) => await StartAgentRequestedAsync();
+        _stop.Click += async (_, _) => await StopAgentRequestedAsync();
+        _restart.Click += async (_, _) => await RestartAgentRequestedAsync();
         _emergency.Click += async (_, _) =>
         {
             if (MessageBox.Show(
@@ -142,6 +151,7 @@ public sealed class MainForm : Form
 
         _supervisor.SnapshotChanged += SupervisorOnSnapshotChanged;
         _supervisor.PendingApprovalChanged += SupervisorOnPendingApprovalChanged;
+        _gameSafetyTimer.Tick += async (_, _) => await EvaluateGameSafetyAsync();
 
         ConfigureTray();
         FormClosing += MainFormClosing;
@@ -191,10 +201,31 @@ public sealed class MainForm : Form
             Hide();
         }
 
-        if (config.AutoStartAgent && !_supervisor.Snapshot.EmergencyStopped)
+        _gameSafetyEnabled = config.PauseAgentDuringProtectedGames;
+        var emergencyStopped = _supervisor.Snapshot.EmergencyStopped;
+
+        if (_gameSafetyEnabled)
+        {
+            var gameRunning = ProtectedGameDetector.IsProtectedGameRunning();
+            _gameSafetyState.Observe(
+                gameRunning,
+                agentRunning: false,
+                resumeWhenGameEndsIfNotRunning:
+                    config.AutoStartAgent && !emergencyStopped);
+
+            Render(_supervisor.Snapshot);
+
+            if (!gameRunning && config.AutoStartAgent && !emergencyStopped)
+            {
+                await _supervisor.StartAsync();
+            }
+        }
+        else if (config.AutoStartAgent && !emergencyStopped)
         {
             await _supervisor.StartAsync();
         }
+
+        _gameSafetyTimer.Start();
     }
 
     private void SupervisorOnSnapshotChanged(object? sender, ManagerSnapshot snapshot)
@@ -393,6 +424,13 @@ public sealed class MainForm : Form
     private void Render(ManagerSnapshot snapshot)
     {
         _agentValue.Text = snapshot.AgentState;
+        _gameSafetyValue.Text = !_gameSafetyEnabled
+            ? "OFF"
+            : _gameSafetyState.IsGameRunning
+                ? (_gameSafetyState.ResumeAgentAfterGame
+                    ? "PAUSED - VALORANT (auto resume)"
+                    : "PAUSED - VALORANT")
+                : "Monitoring";
         _supabaseValue.Text = snapshot.QueueConnectivity;
         _heartbeatValue.Text = snapshot.LastHeartbeat is null
             ? "未確認"
@@ -402,18 +440,144 @@ public sealed class MainForm : Form
             : snapshot.AgentVersion;
         _errorValue.Text = snapshot.LastError ?? "-";
 
+        var gameBlocked =
+            _gameSafetyEnabled && _gameSafetyState.IsGameRunning;
+
         _start.Enabled = !snapshot.EmergencyStopped &&
-            snapshot.ManagerState is not "RUNNING";
-        _stop.Enabled = snapshot.ProcessId is not null;
+            snapshot.ManagerState is not "RUNNING" &&
+            !gameBlocked;
+        _stop.Enabled = snapshot.ProcessId is not null ||
+            (gameBlocked && _gameSafetyState.ResumeAgentAfterGame);
         _restart.Enabled = !snapshot.EmergencyStopped &&
-            snapshot.ProcessId is not null;
+            snapshot.ProcessId is not null &&
+            !gameBlocked;
         _emergency.Enabled = !snapshot.EmergencyStopped;
         _resume.Enabled = snapshot.EmergencyStopped;
     }
 
 
+    private async Task StartAgentRequestedAsync()
+    {
+        if (_gameSafetyEnabled && ProtectedGameDetector.IsProtectedGameRunning())
+        {
+            _gameSafetyState.Observe(
+                gameRunning: true,
+                agentRunning: _supervisor.Snapshot.ProcessId is not null);
+            _gameSafetyState.RequestResumeAfterGame();
+            Render(_supervisor.Snapshot);
+
+            _tray.ShowBalloonTip(
+                4000,
+                "PC Agent - Game Safety",
+                "VALORANT実行中のためAgentは開始しません。ゲーム終了後に自動で開始します。",
+                ToolTipIcon.Info);
+            return;
+        }
+
+        await _supervisor.StartAsync();
+    }
+
+    private async Task StopAgentRequestedAsync()
+    {
+        _gameSafetyState.CancelResumeAfterGame();
+
+        if (_supervisor.Snapshot.ProcessId is not null)
+        {
+            await _supervisor.StopAsync();
+        }
+
+        Render(_supervisor.Snapshot);
+    }
+
+    private async Task RestartAgentRequestedAsync()
+    {
+        if (_gameSafetyEnabled && ProtectedGameDetector.IsProtectedGameRunning())
+        {
+            _gameSafetyState.Observe(
+                gameRunning: true,
+                agentRunning: _supervisor.Snapshot.ProcessId is not null);
+            _gameSafetyState.RequestResumeAfterGame();
+
+            if (_supervisor.Snapshot.ProcessId is not null)
+            {
+                await _supervisor.StopAsync();
+            }
+
+            Render(_supervisor.Snapshot);
+            _tray.ShowBalloonTip(
+                4000,
+                "PC Agent - Game Safety",
+                "VALORANT実行中のためRestartを保留しました。ゲーム終了後にAgentを開始します。",
+                ToolTipIcon.Info);
+            return;
+        }
+
+        await _supervisor.RestartAsync();
+    }
+
+    private async Task EvaluateGameSafetyAsync()
+    {
+        if (
+            IsDisposed
+            || !_gameSafetyEnabled
+            || _gameSafetyCheckInProgress)
+        {
+            return;
+        }
+
+        _gameSafetyCheckInProgress = true;
+
+        try
+        {
+            var gameRunning = ProtectedGameDetector.IsProtectedGameRunning();
+            var transition = _gameSafetyState.Observe(
+                gameRunning,
+                agentRunning: _supervisor.Snapshot.ProcessId is not null);
+
+            if (transition.ShouldPauseAgent)
+            {
+                await _supervisor.StopAsync();
+                _tray.ShowBalloonTip(
+                    4000,
+                    "PC Agent - Game Safety",
+                    "VALORANTを検知したためAgentを停止しました。",
+                    ToolTipIcon.Info);
+            }
+
+            if (
+                transition.ShouldResumeAgent
+                && !_supervisor.Snapshot.EmergencyStopped)
+            {
+                await _supervisor.StartAsync();
+                _tray.ShowBalloonTip(
+                    4000,
+                    "PC Agent - Game Safety",
+                    "VALORANT終了を検知したためAgentを再開しました。",
+                    ToolTipIcon.Info);
+            }
+
+            Render(_supervisor.Snapshot);
+        }
+        finally
+        {
+            _gameSafetyCheckInProgress = false;
+        }
+    }
+
+
     private async Task CheckForUpdateAsync()
     {
+        if (_gameSafetyEnabled && ProtectedGameDetector.IsProtectedGameRunning())
+        {
+            MessageBox.Show(
+                this,
+                "VALORANT実行中はPC Agentを更新しません。ゲーム終了後に更新してください。",
+                "PC Agent - Game Safety",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
         if (_supervisor.Snapshot.EmergencyStopped)
         {
             MessageBox.Show(
@@ -555,6 +719,17 @@ public sealed class MainForm : Form
 
         _configStore.Save(dialog.Result);
 
+        _gameSafetyEnabled = dialog.Result.PauseAgentDuringProtectedGames;
+        if (!_gameSafetyEnabled)
+        {
+            _gameSafetyState.Reset();
+        }
+        else
+        {
+            _ = EvaluateGameSafetyAsync();
+        }
+        Render(_supervisor.Snapshot);
+
         try
         {
             StartupRegistration.SetEnabled(dialog.Result.AutoStartManager);
@@ -619,8 +794,8 @@ public sealed class MainForm : Form
             WindowState = FormWindowState.Normal;
             Activate();
         });
-        menu.Items.Add("Agent Start", null, async (_, _) => await _supervisor.StartAsync());
-        menu.Items.Add("Agent Stop", null, async (_, _) => await _supervisor.StopAsync());
+        menu.Items.Add("Agent Start", null, async (_, _) => await StartAgentRequestedAsync());
+        menu.Items.Add("Agent Stop", null, async (_, _) => await StopAgentRequestedAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("終了", null, async (_, _) =>
         {
@@ -646,6 +821,7 @@ public sealed class MainForm : Form
     {
         if (_allowExit || e.CloseReason == CloseReason.WindowsShutDown)
         {
+            _gameSafetyTimer.Stop();
             _tray.Visible = false;
             return;
         }
