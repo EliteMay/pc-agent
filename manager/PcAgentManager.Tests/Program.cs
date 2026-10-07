@@ -147,14 +147,13 @@ Run("Legacy device credentials are discovered and imported without manual entry"
 
         File.WriteAllText(
             Path.Combine(legacyDirectory, "device.json"),
-            $"""
+            System.Text.Json.JsonSerializer.Serialize(new
             {
-              "relayUrl": "https://vtnwbgejlaqpnwmlzbjy.supabase.co/functions/v1/legacy-gateway",
-              "deviceId": "{{deviceId}}",
-              "deviceToken": "{{token}}",
-              "deviceName": "Windows PC"
-            }
-            """);
+                relayUrl = "https://vtnwbgejlaqpnwmlzbjy.supabase.co/functions/v1/legacy-gateway",
+                deviceId,
+                deviceToken = token,
+                deviceName = "Windows PC"
+            }));
 
         var importer = new LegacyDeviceCredentialImporter(
             [searchRoot],
