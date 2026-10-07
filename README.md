@@ -26,7 +26,7 @@ The Agent is the final authorization boundary. The Manager supervises the Agent 
 ## Repository layout
 
 - `agent/` — Node.js worker and security boundary.
-- `manager/` — C#/.NET supervisor. Implementation follows after the Agent safety foundation.
+- `manager/` — C#/.NET production supervisor and Windows UI.
 - `protocol/` — shared command and IPC protocol documentation.
 - `docs/` — architecture and security specifications.
 - `tests/` — cross-component tests as they are added.
@@ -55,6 +55,8 @@ The first production slice is the Agent safety foundation:
 - authenticated Supabase device queue client and result transport
 - cloud command envelope fields: device ID, tool version, protocol version, operation ID, expiry
 - neutral `pc-agent-device` Supabase Edge Function for device polling/results
+- production .NET 8 Windows Manager with tray UI, supervision, heartbeat, crash recovery, Job Object containment, encrypted token storage, and Emergency Stop
+- portable self-contained Windows Manager + bundled Node.js Agent artifact
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
