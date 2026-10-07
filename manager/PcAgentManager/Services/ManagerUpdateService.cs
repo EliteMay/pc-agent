@@ -386,7 +386,7 @@ public sealed class ManagerUpdateService
 
         foreach (var entry in archive.Entries)
         {
-            if (entry.FullName.Contains(':', StringComparison.Ordinal))
+            if (entry.FullName.Contains(':'))
             {
                 throw new InvalidDataException(
                     "Update archive contains an unsafe path.");
