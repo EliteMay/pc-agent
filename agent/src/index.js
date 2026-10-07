@@ -43,3 +43,10 @@ export {
   LocalApprovalBroker,
   ApprovalBrokerError
 } from "./approval/local-approval-broker.js";
+
+export {
+  createDevelopmentCommandTool,
+  DevelopmentCommandError,
+  validateDevelopmentRequest,
+  resolveTrustedDevelopmentExecutable
+} from "./tools/development-command.js";

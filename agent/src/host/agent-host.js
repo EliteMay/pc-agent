@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { ToolRegistry } from "../tools/tool-registry.js";
 import { registerReadOnlyTools } from "../tools/read-only-tools.js";
 import { registerSafeWriteTools } from "../tools/safe-write-tools.js";
+import { createDevelopmentCommandTool } from "../tools/development-command.js";
 import { OperationJournal } from "../journal/operation-journal.js";
 import { SupabaseQueueClient } from "../cloud/supabase-queue-client.js";
 import { runQueueOnce } from "../queue/run-queue-once.js";
@@ -31,6 +32,9 @@ export async function runAgentHost(config) {
   registerSafeWriteTools(registry, {
     allowedRoots: config.allowedRoots
   });
+  registry.register(createDevelopmentCommandTool({
+    allowedRoots: config.allowedRoots
+  }));
 
   const journal = new OperationJournal(config.journalPath);
   const approvalBroker = new LocalApprovalBroker();

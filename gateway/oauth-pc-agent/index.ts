@@ -4,8 +4,8 @@ import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
-const VERSION = "5";
-const MCP_WAIT_MS = 45000;
+const VERSION = "6";
+const MCP_WAIT_MS = 120000;
 
 const READ_ONLY_TOOLS = new Set([
   "ping",
@@ -21,9 +21,14 @@ const WRITE_TOOLS = new Set([
   "edit_text_file",
 ]);
 
+const DEVELOPMENT_TOOLS = new Set([
+  "run_development_command",
+]);
+
 const DEVICE_TOOLS = new Set([
   ...READ_ONLY_TOOLS,
   ...WRITE_TOOLS,
+  ...DEVELOPMENT_TOOLS,
 ]);
 
 const TOOLS = [
@@ -127,6 +132,23 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "run_development_command",
+    title: "Run an approved development command",
+    description: "Run a tightly allowlisted development command inside an allowed root. Requires explicit local approval. Allowed programs are git inspection commands, npm test, and node --test.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        program: { type: "string", enum: ["git", "npm", "node"] },
+        args: { type: "array", minItems: 1, maxItems: 12, items: { type: "string", maxLength: 256 } },
+        cwd: { type: "string", minLength: 1 },
+        timeout_ms: { type: "integer", minimum: 1000, maximum: 60000 }
+      },
+      required: ["program", "args", "cwd"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "edit_text_file",
@@ -267,6 +289,13 @@ function validateToolArgs(name: string, args: any) {
     }
   }
 
+  if (name === "run_development_command") {
+    if (!args || !["git","npm","node"].includes(args.program)) throw new Error("program must be git, npm, or node");
+    if (!Array.isArray(args.args) || args.args.length < 1 || args.args.length > 12 || args.args.some((v:any) => typeof v !== "string" || v.length < 1 || v.length > 256)) throw new Error("args must contain 1..12 bounded strings");
+    if (typeof args.cwd !== "string" || !args.cwd.trim()) throw new Error("cwd is required");
+    if (args.timeout_ms !== undefined && (!Number.isInteger(args.timeout_ms) || args.timeout_ms < 1000 || args.timeout_ms > 60000)) throw new Error("timeout_ms must be 1000..60000");
+  }
+
   if (name === "edit_text_file") {
     if (!args || typeof args.path !== "string" || !args.path.trim()) {
       throw new Error("path is required");
@@ -304,6 +333,8 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown) {
 
   const useAgentV1 = toolName !== "ping";
   const isWriteTool = WRITE_TOOLS.has(toolName);
+  const isDevelopmentTool = DEVELOPMENT_TOOLS.has(toolName);
+  const requiresLocalApproval = isWriteTool || isDevelopmentTool;
   const queuedStatus = useAgentV1 ? "agent_queued" : "queued";
   const claimedStatus = useAgentV1 ? "agent_claimed" : "claimed";
 
@@ -318,10 +349,10 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown) {
       request_metadata: {
         source: "oauth-gateway",
         transport: useAgentV1 ? "pc-agent-v1" : "legacy",
-        local_approval_required: isWriteTool
+        local_approval_required: requiresLocalApproval
       },
       status: queuedStatus,
-      expires_at: new Date(Date.now() + (isWriteTool ? 60000 : 45000)).toISOString(),
+      expires_at: new Date(Date.now() + (isDevelopmentTool ? 135000 : isWriteTool ? 60000 : 45000)).toISOString(),
     })
     .select("command_id")
     .single();
