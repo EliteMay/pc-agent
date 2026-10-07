@@ -52,6 +52,9 @@ The first production slice is the Agent safety foundation:
 - SHA-256 result fingerprints without storing raw tool output
 - four bounded read-only tools: `system_info`, `list_directory`, `read_text_file`, `list_processes`
 - validated command runtime: envelope -> Tool Registry -> operation journal -> tool execution
+- authenticated Supabase device queue client and result transport
+- cloud command envelope fields: device ID, tool version, protocol version, operation ID, expiry
+- neutral `pc-agent-device` Supabase Edge Function for device polling/results
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
@@ -62,6 +65,8 @@ The first read-only tool set is intentionally narrow:
 - `list_directory` canonicalizes the directory, refuses root escapes, does not follow child links, filters sensitive names, and caps returned entries.
 - `read_text_file` canonicalizes the file path, rejects sensitive paths, binary/non-UTF-8 content, non-files, and files above the configured byte limit.
 - `list_processes` invokes the fixed Windows `System32\\tasklist.exe` binary without a shell and returns only image name + PID.
+
+The production Supabase queue schema and the neutral `pc-agent-device` Edge Function are now wired to the Agent runtime. The existing relay tables remain temporarily in use for backward compatibility while new code and endpoints use neutral names.
 
 Filesystem writes and arbitrary user-supplied command execution are intentionally **not implemented yet**.
 
