@@ -26,3 +26,17 @@ The Edge Function is deployed with platform JWT verification disabled because th
 The schema migration adds command-envelope columns with defaults. Legacy command producers and the old device relay therefore continue to work while the new Agent is introduced.
 
 No plaintext device token or Supabase service-role credential is stored in this repository.
+
+
+## Queue isolation
+
+The production database intentionally uses separate queue states for the v1 Agent:
+
+```text
+legacy worker: queued -> claimed
+v1 Agent:      agent_queued -> agent_claimed
+```
+
+Both paths still finish as `completed`, `failed`, or `expired`.
+
+This prevents an older worker and the production Agent from racing to claim the same command while migration is in progress. The legacy OAuth read-only endpoint routes the four v1 read-only tools to `agent_queued`; its legacy `ping` path remains on the old queue until that compatibility tool is replaced.
