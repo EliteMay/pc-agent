@@ -111,6 +111,7 @@ test("runQueueOnce executes a registered tool and posts a success result", async
     version: "1",
     capability: "system.inspect",
     risk: "low",
+    confirmation: "none",
     execute: async () => ({ platform: "win32" })
   });
   const journal = new OperationJournal(":memory:");
@@ -158,6 +159,7 @@ test("runQueueOnce reports local tool failures without leaking a stack", async (
     version: "1",
     capability: "system.inspect",
     risk: "low",
+    confirmation: "none",
     execute: async () => {
       const error = new Error("simulated failure");
       error.code = "SIMULATED";
@@ -212,6 +214,7 @@ test("runQueueOnce reports duplicate operations without re-executing", async () 
     version: "1",
     capability: "system.inspect",
     risk: "low",
+    confirmation: "none",
     execute: async () => {
       executions += 1;
       return { ok: true };
