@@ -21,6 +21,7 @@ The Manager is a normal-user .NET 8 WinForms application and provides:
 - local Update check that consumes versioned GitHub Release assets
 - SHA-256 verification and path-safe staged extraction before any switch
 - transactional bootstrap that health-checks the new bundled Agent and automatically starts the previous Manager on failure
+- optional Game Safety mode (enabled by default) that checks only protected-game process names, pauses the Agent during VALORANT, and conditionally resumes it after the game closes
 
 The Manager is only a supervisor. It does **not** implement Tool Registry, capability, path, risk, or remote-command authorization rules.
 
@@ -70,3 +71,14 @@ SHA256SUMS.txt
 ```
 
 The .NET runtime and Node.js runtime are bundled, so normal use does not require PowerShell, a separate .NET install, or a separate Node.js install.
+
+
+## Game Safety
+
+Game Safety is enabled by default and can be changed in Settings.
+
+When enabled, the Manager checks only whether the VALORANT game process name is present. It does not read game memory, inspect Vanguard, hook input, capture the screen, or inject into the game process.
+
+If VALORANT starts while the Agent is running, the Manager stops the Agent and remembers that it should resume afterward. If the Agent was already manually stopped, it stays stopped after the game. Starting the Manager while VALORANT is already running defers configured Agent auto-start until the game closes.
+
+Game Safety is a convenience/risk-reduction feature, not a guarantee about anti-cheat behavior.
