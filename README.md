@@ -75,3 +75,4 @@ Filesystem writes and arbitrary user-supplied command execution are intentionall
 Filesystem access must use the canonical path guards, not the lexical helper alone. For new files, callers must resolve the nearest existing parent and call write-time revalidation immediately before creating or replacing the file. Write tools remain intentionally disabled until the remaining safe-write checks are added.
 
 See `docs/superpowers/specs/2026-10-07-pc-agent-design.md` for the system design.
+
