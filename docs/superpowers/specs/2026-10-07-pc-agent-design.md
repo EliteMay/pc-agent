@@ -738,6 +738,17 @@ All existing read-only tools should work through the new registry before write s
 - verify ping and system_info after legacy removal
 - verify database advisors after the migration
 
+### v0.9 — Workspace Discovery
+
+- add bounded read-only find_paths for recursive file/directory name discovery
+- add bounded read-only search_text for literal UTF-8 workspace search
+- never traverse symlinks/junctions during recursive discovery
+- skip sensitive paths and common dependency/metadata directories
+- cap recursion depth, visited entries/directories, results, file bytes, matches per file, and snippet size
+- revalidate each search_text file against allowed roots immediately before opening it
+- expose both tools through OAuth and Task Observe/Verify
+- validate against the real D:\\AI workspace before release
+
 ### Later
 
 - richer completion-evidence policies
