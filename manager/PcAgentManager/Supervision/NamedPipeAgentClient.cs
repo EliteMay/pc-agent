@@ -22,19 +22,64 @@ public sealed class NamedPipeAgentClient
     public async Task<AgentHealthSnapshot> GetHealthAsync(
         CancellationToken cancellationToken = default)
     {
-        var result = await SendAsync("get_health", cancellationToken);
+        var result = await SendAsync(
+            "get_health",
+            parameters: null,
+            cancellationToken);
         return result.Deserialize<AgentHealthSnapshot>(JsonOptions)
             ?? throw new InvalidDataException("Agent returned no health object.");
+    }
+
+    public async Task<PendingApprovalSnapshot?> GetPendingApprovalAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var result = await SendAsync(
+            "get_pending_approval",
+            parameters: null,
+            cancellationToken);
+
+        if (result.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return result.Deserialize<PendingApprovalSnapshot>(JsonOptions);
+    }
+
+    public async Task<ApprovalResponseSnapshot> RespondApprovalAsync(
+        string operationId,
+        string decision,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(decision);
+
+        var result = await SendAsync(
+            "respond_approval",
+            new
+            {
+                operation_id = operationId,
+                decision
+            },
+            cancellationToken);
+
+        return result.Deserialize<ApprovalResponseSnapshot>(JsonOptions)
+            ?? new ApprovalResponseSnapshot
+            {
+                Accepted = false,
+                Code = "EMPTY_APPROVAL_RESPONSE"
+            };
     }
 
     public async Task PrepareShutdownAsync(
         CancellationToken cancellationToken = default)
     {
-        _ = await SendAsync("prepare_shutdown", cancellationToken);
+        _ = await SendAsync("prepare_shutdown", parameters: null, cancellationToken);
     }
 
     private async Task<JsonElement> SendAsync(
         string method,
+        object? parameters,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -67,7 +112,12 @@ public sealed class NamedPipeAgentClient
             leaveOpen: true);
 
         var id = Guid.NewGuid().ToString("N");
-        await writer.WriteLineAsync(JsonSerializer.Serialize(new { id, method }));
+        await writer.WriteLineAsync(JsonSerializer.Serialize(new
+        {
+            id,
+            method,
+            @params = parameters
+        }));
 
         var line = await reader.ReadLineAsync(timeout.Token);
         if (string.IsNullOrWhiteSpace(line))
