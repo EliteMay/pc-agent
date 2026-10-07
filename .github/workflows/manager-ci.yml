@@ -19,9 +19,9 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  test-and-package:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -30,14 +30,54 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
       - name: Node tests
         working-directory: agent
         run: npm test
+
       - name: Restore Manager
         run: dotnet restore manager/PcAgentManager/PcAgentManager.csproj
+
       - name: Restore Manager tests
         run: dotnet restore manager/PcAgentManager.Tests/PcAgentManager.Tests.csproj
+
       - name: Build Manager
         run: dotnet build manager/PcAgentManager/PcAgentManager.csproj -c Release --no-restore
+
       - name: Manager regression tests
         run: dotnet run --project manager/PcAgentManager.Tests/PcAgentManager.Tests.csproj -c Release --no-restore
+
+      - name: Publish Manager
+        run: dotnet publish manager/PcAgentManager/PcAgentManager.csproj -c Release --no-restore -o dist/manager
+
+      - name: Assemble portable Windows app
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $PWD 'dist\pc-agent-manager-win-x64'
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $bundle 'Runtime') | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $bundle 'Agent') | Out-Null
+
+          Copy-Item 'dist\manager\*' $bundle -Recurse -Force
+          Copy-Item (Get-Command node).Source (Join-Path $bundle 'Runtime\node.exe') -Force
+          Copy-Item 'agent\bin' (Join-Path $bundle 'Agent\bin') -Recurse -Force
+          Copy-Item 'agent\src' (Join-Path $bundle 'Agent\src') -Recurse -Force
+          Copy-Item 'agent\package.json' (Join-Path $bundle 'Agent\package.json') -Force
+
+          $manager = Join-Path $bundle 'PcAgentManager.exe'
+          & $manager --bundle-check
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundle check failed with exit code $LASTEXITCODE"
+          }
+
+          Get-FileHash $manager -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  PcAgentManager.exe" } |
+            Set-Content (Join-Path $bundle 'SHA256SUMS.txt')
+
+      - name: Upload Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: pc-agent-manager-win-x64
+          path: dist/pc-agent-manager-win-x64
+          if-no-files-found: error
+          retention-days: 14
