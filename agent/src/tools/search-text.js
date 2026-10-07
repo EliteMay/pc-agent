@@ -157,6 +157,7 @@ export function createSearchTextTool({
       let skippedLargeFiles = 0;
       let skippedBinaryOrInvalidUtf8 = 0;
       let unreadableFiles = 0;
+      let rejectedChangedPaths = 0;
 
       const scan = walkWorkspace({
         rootPath: canonicalRoot,
@@ -164,8 +165,20 @@ export function createSearchTextTool({
         onEntry(entry) {
           if (entry.type !== "file") return true;
 
+          let canonicalFile;
+          try {
+            canonicalFile = resolveExistingPathWithinAllowedRoots(
+              entry.path,
+              allowedRoots
+            );
+            assertNonSensitivePath(entry.path, canonicalFile);
+          } catch {
+            rejectedChangedPaths += 1;
+            return true;
+          }
+
           const bounded = readBoundedSearchFile(
-            entry.path,
+            canonicalFile,
             maximumFileBytes
           );
 
@@ -207,10 +220,10 @@ export function createSearchTextTool({
             if (matchIndex < 0) continue;
 
             matches.push(Object.freeze({
-              path: entry.path,
+              path: canonicalFile,
               relative_path: path.win32.relative(
                 canonicalRoot,
-                entry.path
+                canonicalFile
               ),
               line: lineIndex + 1,
               snippet: boundedSnippet(
@@ -246,6 +259,7 @@ export function createSearchTextTool({
         skipped_binary_or_invalid_utf8:
           skippedBinaryOrInvalidUtf8,
         unreadable_files: unreadableFiles,
+        rejected_changed_paths: rejectedChangedPaths,
         ...scan,
         truncated:
           matches.length >= request.maxResults
