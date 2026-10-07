@@ -728,6 +728,16 @@ All existing read-only tools should work through the new registry before write s
 - stop and disable the old standalone kaito-device-agent worker only after v1 ping passes end-to-end
 - verify device heartbeat remains on the current Agent version after legacy shutdown
 
+### v0.8.3 — v1-only Queue Retirement
+
+- reject legacy queued / claimed states at the database constraint
+- drop claim_kaito_pc_command(uuid)
+- preserve only agent_queued / agent_claimed plus terminal states
+- replace obsolete public gateway slugs with HTTP 410 retirement stubs
+- keep historical terminal command rows for audit
+- verify ping and system_info after legacy removal
+- verify database advisors after the migration
+
 ### Later
 
 - richer completion-evidence policies
