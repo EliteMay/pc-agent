@@ -1,6 +1,7 @@
 const PROTOCOL_VERSION = 1;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const TOOL_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+const TOOL_VERSION_PATTERN = /^[0-9]+(?:\.[0-9]+){0,2}$/;
 
 export class CommandEnvelopeError extends Error {
   constructor(message, code) {
@@ -41,6 +42,21 @@ function parseTimestamp(value, fieldName) {
   return timestamp;
 }
 
+function optionalMetadata(value) {
+  if (value === undefined) {
+    return Object.freeze({});
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CommandEnvelopeError(
+      "request_metadata must be an object.",
+      "INVALID_REQUEST_METADATA"
+    );
+  }
+
+  return Object.freeze({ ...value });
+}
+
 export function validateCommandEnvelope(command, { now = new Date() } = {}) {
   if (!command || typeof command !== "object" || Array.isArray(command)) {
     throw new CommandEnvelopeError("Command must be an object.", "INVALID_COMMAND");
@@ -48,9 +64,20 @@ export function validateCommandEnvelope(command, { now = new Date() } = {}) {
 
   const commandId = requireId(command.command_id, "command_id");
   const operationId = requireId(command.operation_id, "operation_id");
+  const deviceId = requireId(command.device_id, "device_id");
 
   if (typeof command.tool !== "string" || !TOOL_PATTERN.test(command.tool)) {
     throw new CommandEnvelopeError("tool is invalid.", "INVALID_TOOL");
+  }
+
+  if (
+    typeof command.tool_version !== "string"
+    || !TOOL_VERSION_PATTERN.test(command.tool_version)
+  ) {
+    throw new CommandEnvelopeError(
+      "tool_version is required and must be a numeric version.",
+      "INVALID_TOOL_VERSION"
+    );
   }
 
   if (command.protocol_version !== PROTOCOL_VERSION) {
@@ -87,11 +114,14 @@ export function validateCommandEnvelope(command, { now = new Date() } = {}) {
   return Object.freeze({
     command_id: commandId,
     operation_id: operationId,
+    device_id: deviceId,
     tool: command.tool,
+    tool_version: command.tool_version,
     protocol_version: PROTOCOL_VERSION,
     created_at: command.created_at,
     expires_at: command.expires_at,
-    args: Object.freeze({ ...command.args })
+    args: Object.freeze({ ...command.args }),
+    request_metadata: optionalMetadata(command.request_metadata)
   });
 }
 
