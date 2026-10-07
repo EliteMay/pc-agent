@@ -21,26 +21,29 @@ The Agent sends its existing high-entropy per-device bearer token to the `pc-age
 
 The Edge Function is deployed with platform JWT verification disabled because the device credential is not a Supabase user JWT. The function body performs the custom device-token verification before poll/result access.
 
-## Compatibility
+## v1-only production queue
 
-The schema migration adds command-envelope columns with defaults. Legacy command producers and the old device relay therefore continue to work while the new Agent is introduced.
-
-No plaintext device token or Supabase service-role credential is stored in this repository.
-
-
-## Queue isolation
-
-The production database intentionally uses separate queue states for the v1 Agent:
+The migration period is complete. Production command lifecycle states are now:
 
 ```text
-legacy worker: queued -> claimed
-v1 Agent:      agent_queued -> agent_claimed
+agent_queued -> agent_claimed -> completed | failed | expired
 ```
 
-Both paths still finish as `completed`, `failed`, or `expired`.
+Legacy `queued` / `claimed` values are rejected by the database constraint, and the old `claim_kaito_pc_command(uuid)` RPC is removed. Historical terminal command rows remain available for audit.
 
-This prevents an older worker and the production Agent from racing to claim the same command while migration is in progress. The legacy OAuth read-only endpoint routes the four v1 read-only tools to `agent_queued`; its legacy `ping` path remains on the old queue until that compatibility tool is replaced.
+The only device worker path is:
 
+```text
+OAuth gateway
+  -> kaito_pc_commands (agent_queued)
+  -> claim_pc_agent_command_v1
+  -> pc-agent-device
+  -> SupabaseQueueClient
+  -> Agent Runtime / Tool Registry / Journal
+  -> pc-agent-device result endpoint
+```
+
+Obsolete public Edge Function slugs are retained only as retirement stubs returning HTTP 410 so stale clients fail clearly instead of reaching a legacy queue implementation.
 
 ## OAuth safe-write gateway
 
@@ -123,3 +126,10 @@ OAuth Gateway
 ```
 
 The OAuth gateway no longer creates legacy `queued`/`claimed` ping commands. This removes the final runtime dependency on the old standalone `kaito-device-agent.mjs` worker.
+
+
+## OAuth v1-only retirement — v8.3
+
+Gateway v8.3 assumes the production database is v1-only. Every Windows tool, including `ping`, uses `agent_queued` / `agent_claimed`. The database rejects legacy queue states and exposes only `claim_pc_agent_command_v1` for device claiming.
+
+The old gateway slugs are deployed from `gateway/retired-pc-agent/index.ts` and return HTTP 410 with the current OAuth gateway location. They do not poll, enqueue, pair, update, or execute PC commands.
