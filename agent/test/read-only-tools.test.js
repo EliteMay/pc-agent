@@ -36,7 +36,7 @@ function createFixture(options = {}) {
   };
 }
 
-test("registers exactly the four initial read-only tools", () => {
+test("registers the five read-only tools including v1 ping", () => {
   const fixture = createFixture();
 
   try {
@@ -44,12 +44,17 @@ test("registers exactly the four initial read-only tools", () => {
       fixture.registry.list().map((tool) => tool.name).sort(),
       [
         "list_directory",
+        "ping",
         "list_processes",
         "read_text_file",
         "system_info"
       ]
     );
 
+    assert.equal(
+      fixture.registry.require("ping").capability,
+      "system.inspect"
+    );
     assert.equal(
       fixture.registry.require("read_text_file").capability,
       "file.read"
@@ -61,6 +66,30 @@ test("registers exactly the four initial read-only tools", () => {
     assert.equal(
       fixture.registry.require("system_info").capability,
       "system.inspect"
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("ping returns a bounded v1 pong", async () => {
+  const fixture = createFixture();
+
+  try {
+    const result = await fixture.registry
+      .require("ping")
+      .execute({});
+
+    assert.deepEqual(result, {
+      success: true,
+      message: "pong",
+      transport: "pc-agent-v1"
+    });
+
+    await assert.rejects(
+      fixture.registry.require("ping").execute({ extra: true }),
+      (error) => error instanceof ReadOnlyToolError
+        && error.code === "INVALID_ARGUMENTS"
     );
   } finally {
     fixture.cleanup();
