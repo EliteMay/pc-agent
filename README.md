@@ -62,6 +62,8 @@ The first production slice is the Agent safety foundation:
 - confirmed `create_directory` safe-write tool
 - confirmed `write_text_file` with expected SHA-256, backup, atomic temp-file replacement, and read-back hash verification
 - confirmed `edit_text_file` that replaces exactly one expected UTF-8 text occurrence with the same hash/backup/verification protections
+- structured v0.5 Development Runner with shell disabled, stdin disabled, bounded timeout/output, sanitized environment, allowed-root cwd enforcement, and full-tree timeout termination
+- development subcommand policy: git inspection only, npm test, and node --test; all development execution requires explicit local approval
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
@@ -75,7 +77,7 @@ The first read-only tool set is intentionally narrow:
 
 The production Supabase queue schema and the neutral `pc-agent-device` Edge Function are now wired to the Agent runtime. The existing relay tables remain temporarily in use for backward compatibility while new code and endpoints use neutral names.
 
-Filesystem writes are now limited to the three v0.4 safe-write tools and require explicit local approval in the Manager. Arbitrary user-supplied command execution remains intentionally **not implemented**.
+Filesystem writes are now limited to the three v0.4 safe-write tools and require explicit local approval in the Manager. Arbitrary user-supplied command execution remains intentionally **not implemented**. v0.5 only permits structured, policy-checked development commands.
 
 Filesystem access must use the canonical path guards, not the lexical helper alone. For new files, callers must resolve the nearest existing parent and call write-time revalidation immediately before creating or replacing the file. Write tools remain restricted to configured allowed roots, deny sensitive paths, and are gated by explicit local approval. Existing-file replacement additionally requires the caller to provide the current SHA-256 hash.
 
