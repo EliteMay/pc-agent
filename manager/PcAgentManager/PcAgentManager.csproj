@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>PcAgentManager</AssemblyName>
     <RootNamespace>PcAgentManager</RootNamespace>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
