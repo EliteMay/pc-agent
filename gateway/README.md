@@ -44,13 +44,14 @@ This prevents an older worker and the production Agent from racing to claim the 
 
 ## OAuth safe-write gateway
 
-The deployed OAuth MCP endpoint remains on its existing Supabase function slug for compatibility, but v4 now exposes two locally approved write tools:
+The deployed OAuth MCP endpoint remains on its existing Supabase function slug for compatibility, and v5 now exposes three locally approved write tools:
 
 - `create_directory`
 - `write_text_file`
+- `edit_text_file`
 
 Both commands are routed to the production `agent_queued` queue and require explicit approval in the local PC Agent Manager before the Agent executes them.
 
-`write_text_file` requires `expected_sha256` when replacing an existing file. New files must use `expected_sha256: null`. The Agent still enforces allowed roots, sensitive-path blocking, optimistic concurrency, backup, atomic replacement, operation journaling, and read-back hash verification.
+`write_text_file` requires `expected_sha256` when replacing an existing file. `edit_text_file` requires the current SHA-256 and exactly one matching `old_text` occurrence before it can build the approved replacement. New files must use `expected_sha256: null`. The Agent still enforces allowed roots, sensitive-path blocking, optimistic concurrency, backup, atomic replacement, operation journaling, and read-back hash verification.
 
 The OAuth gateway is not the final authorization authority. Local Agent policy and local Manager approval remain mandatory.
