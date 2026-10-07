@@ -19,6 +19,10 @@ public sealed class AgentConfiguration
     public bool AutoStartManager { get; set; } = false;
 
     public bool PauseAgentDuringProtectedGames { get; set; } = true;
+
+    public bool ManageDesktopCommanderRemote { get; set; } = false;
+
+    public string DesktopCommanderStartScript { get; set; } = "";
 }
 
 public sealed record ConfigurationValidationResult(
