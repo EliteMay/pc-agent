@@ -188,3 +188,50 @@ test("failed operations are journaled and are not automatically retried", async 
     fixture.cleanup();
   }
 });
+
+
+test("journal success-write failure does not rewrite an executed operation as FAILED", async () => {
+  let markFailedCalls = 0;
+
+  const journal = {
+    beginOperation() {
+      return {
+        accepted: true,
+        record: {
+          operation_id: "op-journal-failure",
+          status: "RUNNING"
+        }
+      };
+    },
+    markSucceeded() {
+      throw new OperationJournalError(
+        "simulated journal persistence failure",
+        "JOURNAL_WRITE_FAILED"
+      );
+    },
+    markFailed() {
+      markFailedCalls += 1;
+    }
+  };
+
+  const tool = {
+    execute: async () => ({ changed: true })
+  };
+
+  await assert.rejects(
+    executeOnce({
+      journal,
+      command: {
+        command_id: "cmd-journal-failure",
+        operation_id: "op-journal-failure",
+        tool: "write_text_file",
+        args: {}
+      },
+      tool
+    }),
+    (error) => error instanceof OperationJournalError
+      && error.code === "JOURNAL_WRITE_FAILED"
+  );
+
+  assert.equal(markFailedCalls, 0);
+});
