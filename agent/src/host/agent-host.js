@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { ToolRegistry } from "../tools/tool-registry.js";
 import { registerReadOnlyTools } from "../tools/read-only-tools.js";
+import { registerSafeWriteTools } from "../tools/safe-write-tools.js";
 import { OperationJournal } from "../journal/operation-journal.js";
 import { SupabaseQueueClient } from "../cloud/supabase-queue-client.js";
 import { runQueueOnce } from "../queue/run-queue-once.js";
@@ -25,6 +26,9 @@ function log(event, details = {}) {
 export async function runAgentHost(config) {
   const registry = new ToolRegistry();
   registerReadOnlyTools(registry, {
+    allowedRoots: config.allowedRoots
+  });
+  registerSafeWriteTools(registry, {
     allowedRoots: config.allowedRoots
   });
 
@@ -71,6 +75,7 @@ export async function runAgentHost(config) {
           client,
           registry,
           journal,
+          approvalProvider: approvalBroker,
           waitMs: 5000,
           onCommand(command) {
             health = setActiveCommand(health, command.command_id);

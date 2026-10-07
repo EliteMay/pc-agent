@@ -24,7 +24,8 @@ export async function runQueueOnce({
   journal,
   now = new Date(),
   waitMs,
-  onCommand
+  onCommand,
+  approvalProvider
 }) {
   if (!client || typeof client.poll !== "function" || typeof client.submitResult !== "function") {
     throw new TypeError("client must provide poll() and submitResult().");
@@ -53,6 +54,7 @@ export async function runQueueOnce({
       registry,
       journal,
       command,
+      approvalProvider,
       now
     });
   } catch (error) {

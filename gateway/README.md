@@ -40,3 +40,17 @@ v1 Agent:      agent_queued -> agent_claimed
 Both paths still finish as `completed`, `failed`, or `expired`.
 
 This prevents an older worker and the production Agent from racing to claim the same command while migration is in progress. The legacy OAuth read-only endpoint routes the four v1 read-only tools to `agent_queued`; its legacy `ping` path remains on the old queue until that compatibility tool is replaced.
+
+
+## OAuth safe-write gateway
+
+The deployed OAuth MCP endpoint remains on its existing Supabase function slug for compatibility, but v4 now exposes two locally approved write tools:
+
+- `create_directory`
+- `write_text_file`
+
+Both commands are routed to the production `agent_queued` queue and require explicit approval in the local PC Agent Manager before the Agent executes them.
+
+`write_text_file` requires `expected_sha256` when replacing an existing file. New files must use `expected_sha256: null`. The Agent still enforces allowed roots, sensitive-path blocking, optimistic concurrency, backup, atomic replacement, operation journaling, and read-back hash verification.
+
+The OAuth gateway is not the final authorization authority. Local Agent policy and local Manager approval remain mandatory.

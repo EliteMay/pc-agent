@@ -34,3 +34,12 @@ export {
 } from "./cloud/supabase-queue-client.js";
 export { runQueueOnce } from "./queue/run-queue-once.js";
 export { AgentRuntimeError } from "./execution/agent-runtime.js";
+
+export {
+  registerSafeWriteTools,
+  SafeWriteToolError
+} from "./tools/safe-write-tools.js";
+export {
+  LocalApprovalBroker,
+  ApprovalBrokerError
+} from "./approval/local-approval-broker.js";

@@ -24,8 +24,10 @@ public sealed class AgentSupervisor : IAsyncDisposable
     private bool _manualStopRequested;
     private bool _disposed;
     private int _recentCrashCount;
+    private string? _pendingApprovalOperationId;
 
     public event EventHandler<ManagerSnapshot>? SnapshotChanged;
+    public event Action<PendingApprovalSnapshot?>? PendingApprovalChanged;
 
     public ManagerSnapshot Snapshot { get; private set; }
 
@@ -135,7 +137,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
                 JsonSerializer.Serialize(config.AllowedRoots);
             startInfo.Environment["PC_AGENT_JOURNAL_PATH"] = _paths.JournalPath;
             startInfo.Environment["PC_AGENT_PIPE_NAME"] = _pipeName;
-            startInfo.Environment["PC_AGENT_VERSION"] = "0.3.0";
+            startInfo.Environment["PC_AGENT_VERSION"] = "0.4.0";
 
             var process = new Process
             {
@@ -212,6 +214,35 @@ public sealed class AgentSupervisor : IAsyncDisposable
         _crashPolicy.Reset();
         _recentCrashCount = 0;
         await StartAsync();
+    }
+
+    public async Task<bool> RespondApprovalAsync(
+        string operationId,
+        bool approved,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var pipe = new NamedPipeAgentClient(_pipeName);
+        var response = await pipe.RespondApprovalAsync(
+            operationId,
+            approved ? "approved" : "denied",
+            cancellationToken);
+
+        if (!response.Accepted)
+        {
+            _logger.Write(
+                "warn",
+                $"Approval response rejected: {response.Code ?? "unknown"}");
+            return false;
+        }
+
+        _logger.Write(
+            "info",
+            $"Local approval {(approved ? "approved" : "denied")} operation={operationId}");
+
+        PublishPendingApproval(null);
+        return true;
     }
 
     public async Task EmergencyStopAsync()
@@ -404,7 +435,10 @@ public sealed class AgentSupervisor : IAsyncDisposable
             try
             {
                 var health = await pipe.GetHealthAsync(cancellationToken);
+                var pendingApproval = await pipe.GetPendingApprovalAsync(cancellationToken);
                 var heartbeat = DateTimeOffset.UtcNow;
+
+                PublishPendingApproval(pendingApproval);
 
                 Publish(new(
                     ManagerState: "RUNNING",
@@ -470,6 +504,24 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
         _process?.Dispose();
         _process = null;
+
+        PublishPendingApproval(null);
+    }
+
+    private void PublishPendingApproval(PendingApprovalSnapshot? pending)
+    {
+        var operationId = pending?.OperationId;
+
+        if (string.Equals(
+                _pendingApprovalOperationId,
+                operationId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _pendingApprovalOperationId = operationId;
+        PendingApprovalChanged?.Invoke(pending);
     }
 
     private void PublishFailure(string error)
