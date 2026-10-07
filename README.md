@@ -64,6 +64,7 @@ The first production slice is the Agent safety foundation:
 - confirmed `edit_text_file` that replaces exactly one expected UTF-8 text occurrence with the same hash/backup/verification protections
 - structured v0.5 Development Runner with shell disabled, stdin disabled, bounded timeout/output, sanitized environment, allowed-root cwd enforcement, and full-tree timeout termination
 - development subcommand policy: git inspection only, npm test, and node --test; all development execution requires explicit local approval
+- transactional v0.6 Manager updater using GitHub Releases, SHA-256 verification, safe ZIP extraction, staged bundle-check, new-Agent health validation, and automatic rollback to the previous Manager when verification fails
 - Windows CI
 
 The journal prevents a repeated `operation_id` from executing twice, even after process restart. A process that dies while an operation is `RUNNING` causes that record to become `UNKNOWN_OUTCOME` on the next startup, so the Agent fails closed instead of blindly retrying.
