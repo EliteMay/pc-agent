@@ -1,6 +1,8 @@
 import {
-  readFileSync,
-  statSync
+  closeSync,
+  fstatSync,
+  openSync,
+  readSync
 } from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
@@ -20,6 +22,61 @@ import {
 
 const MAX_MATCHES_PER_FILE = 10;
 const MAX_SNIPPET_CHARS = 320;
+
+function readBoundedSearchFile(filePath, maximumFileBytes) {
+  let descriptor;
+
+  try {
+    descriptor = openSync(filePath, "r");
+    const stats = fstatSync(descriptor);
+
+    if (!stats.isFile()) {
+      return Object.freeze({
+        kind: "not_file",
+        buffer: null
+      });
+    }
+
+    if (stats.size > maximumFileBytes) {
+      return Object.freeze({
+        kind: "too_large",
+        buffer: null
+      });
+    }
+
+    const buffer = Buffer.alloc(stats.size);
+    let offset = 0;
+
+    while (offset < buffer.length) {
+      const bytesRead = readSync(
+        descriptor,
+        buffer,
+        offset,
+        buffer.length - offset,
+        offset
+      );
+
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+
+    return Object.freeze({
+      kind: "ok",
+      buffer: offset === buffer.length
+        ? buffer
+        : buffer.subarray(0, offset)
+    });
+  } catch {
+    return Object.freeze({
+      kind: "unreadable",
+      buffer: null
+    });
+  } finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch {}
+    }
+  }
+}
 
 function decodeSearchableUtf8(buffer) {
   if (buffer.includes(0x00)) return null;
@@ -107,33 +164,26 @@ export function createSearchTextTool({
         onEntry(entry) {
           if (entry.type !== "file") return true;
 
-          let stats;
-          try {
-            stats = statSync(entry.path);
-          } catch {
+          const bounded = readBoundedSearchFile(
+            entry.path,
+            maximumFileBytes
+          );
+
+          if (bounded.kind === "too_large") {
+            skippedLargeFiles += 1;
+            return true;
+          }
+
+          if (bounded.kind === "not_file") {
+            return true;
+          }
+
+          if (bounded.kind !== "ok") {
             unreadableFiles += 1;
             return true;
           }
 
-          if (
-            !stats.isFile()
-            || stats.size > maximumFileBytes
-          ) {
-            if (stats.size > maximumFileBytes) {
-              skippedLargeFiles += 1;
-            }
-            return true;
-          }
-
-          let buffer;
-          try {
-            buffer = readFileSync(entry.path);
-          } catch {
-            unreadableFiles += 1;
-            return true;
-          }
-
-          const text = decodeSearchableUtf8(buffer);
+          const text = decodeSearchableUtf8(bounded.buffer);
           if (text === null) {
             skippedBinaryOrInvalidUtf8 += 1;
             return true;
@@ -206,6 +256,7 @@ export function createSearchTextTool({
 }
 
 export const searchTextInternals = Object.freeze({
+  readBoundedSearchFile,
   decodeSearchableUtf8,
   boundedSnippet
 });
