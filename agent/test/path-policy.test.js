@@ -15,6 +15,7 @@ import {
   isSensitivePath,
   resolveExistingPathWithinAllowedRoots,
   resolveNewPathWithinAllowedRoots,
+  revalidateNewPathBeforeWrite,
   PathPolicyError
 } from "../src/security/path-policy.js";
 
@@ -169,6 +170,89 @@ test("allowed root may itself be a junction without weakening containment", {
     assert.equal(
       resolved.toLocaleLowerCase("en-US"),
       realpathSync.native(file).toLocaleLowerCase("en-US")
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("new path rejects Windows alternate data stream syntax and reserved names", {
+  skip: process.platform !== "win32"
+}, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pc-agent-invalid-name-"));
+  const root = path.join(directory, "Allowed");
+
+  try {
+    mkdirSync(root, { recursive: true });
+
+    assert.throws(
+      () => resolveNewPathWithinAllowedRoots(
+        path.join(root, "file.txt:secret"),
+        [root]
+      ),
+      (error) => error instanceof PathPolicyError
+        && error.code === "INVALID_NEW_PATH_SEGMENT"
+    );
+
+    assert.throws(
+      () => resolveNewPathWithinAllowedRoots(
+        path.join(root, "CON.txt"),
+        [root]
+      ),
+      (error) => error instanceof PathPolicyError
+        && error.code === "RESERVED_WINDOWS_NAME"
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("write-time revalidation detects a parent replaced by a junction", {
+  skip: process.platform !== "win32"
+}, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pc-agent-toctou-"));
+  const root = path.join(directory, "Allowed");
+  const parent = path.join(root, "parent");
+  const outside = path.join(directory, "Outside");
+  const candidate = path.join(parent, "new-file.txt");
+
+  try {
+    mkdirSync(parent, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+
+    const expected = resolveNewPathWithinAllowedRoots(candidate, [root]);
+
+    rmSync(parent, { recursive: true, force: true });
+    symlinkSync(outside, parent, "junction");
+
+    assert.throws(
+      () => revalidateNewPathBeforeWrite(candidate, [root], expected),
+      (error) => error instanceof PathPolicyError
+        && (
+          error.code === "PATH_OUTSIDE_ALLOWED_ROOTS"
+          || error.code === "PATH_CHANGED_DURING_OPERATION"
+        )
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("missing allowed root fails closed", {
+  skip: process.platform !== "win32"
+}, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pc-agent-missing-root-"));
+  const missingRoot = path.join(directory, "missing");
+
+  try {
+    assert.throws(
+      () => resolveNewPathWithinAllowedRoots(
+        path.join(missingRoot, "file.txt"),
+        [missingRoot]
+      ),
+      (error) => error instanceof PathPolicyError
+        && error.code === "ALLOWED_ROOT_NOT_FOUND"
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });
