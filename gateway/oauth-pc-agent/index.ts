@@ -409,6 +409,12 @@ function validateTaskStepArgs(args: any) {
   }
   if (!TASK_PHASES.has(args?.phase)) throw new Error("phase is invalid");
   if (!DEVICE_TOOLS.has(args?.tool)) throw new Error("tool is not allowed");
+  if ((args.phase === "observe" || args.phase === "verify") && !READ_ONLY_TOOLS.has(args.tool)) {
+    throw new Error("observe and verify phases may use read-only tools only");
+  }
+  if (args.phase === "act" && READ_ONLY_TOOLS.has(args.tool)) {
+    throw new Error("act phase must use a locally governed write or development tool");
+  }
   if (!args?.arguments || typeof args.arguments !== "object" || Array.isArray(args.arguments)) {
     throw new Error("arguments must be an object");
   }
@@ -510,6 +516,16 @@ async function beginTask(ctx: any, args: any) {
 async function getTask(ctx: any, taskId: string) {
   const userId = requireUuid(ctx?.userClaims?.id, "OAuth user id");
   requireUuid(taskId, "task_id");
+
+  const nowIso = new Date().toISOString();
+  await ctx.supabaseAdmin
+    .from("kaito_pc_task_runs")
+    .update({ status: "expired", completed_at: nowIso })
+    .eq("task_id", taskId)
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .lte("deadline_at", nowIso);
+
   const { data, error } = await ctx.supabaseAdmin
     .from("kaito_pc_task_runs")
     .select("*")
@@ -888,6 +904,7 @@ const handler = async (req: Request, ctx: any) => {
             tool: args.tool,
             attempt: reservation.attempt,
             task_status: finish.task_status,
+            command_id: outcome.commandId,
             result: outcome.result,
           }, false);
         }
@@ -911,6 +928,7 @@ const handler = async (req: Request, ctx: any) => {
           attempt: reservation.attempt,
           task_status: finish.task_status,
           repeated_failure_count: finish.repeated_failure_count,
+          command_id: outcome.commandId,
           failure_fingerprint: fingerprint,
           error: outcome.error,
         }, true);
