@@ -34,6 +34,31 @@ internal static class Program
             return;
         }
 
+        if (TryGetOption(args, "--update-bootstrap", out var statePath))
+        {
+            if (!TryGetIntOption(args, "--parent-pid", out var parentPid))
+            {
+                Environment.ExitCode = 24;
+                return;
+            }
+
+            Environment.ExitCode = UpdateBootstrapper
+                .RunAsync(paths, statePath!, parentPid)
+                .GetAwaiter()
+                .GetResult();
+            return;
+        }
+
+        if (args.Contains(
+                "--update-health-check",
+                StringComparer.OrdinalIgnoreCase))
+        {
+            Environment.ExitCode = RunUpdateHealthCheckAsync(paths)
+                .GetAwaiter()
+                .GetResult();
+            return;
+        }
+
         using var mutex = new Mutex(
             initiallyOwned: true,
             name: @"Local\PcAgentManager-SingleInstance",
@@ -58,10 +83,24 @@ internal static class Program
         var store = new ManagerConfigurationStore(paths);
         var emergency = new EmergencyStopStore(paths.EmergencyStopPath);
         var logger = new ManagerLogger(paths.LogPath);
-        var supervisor = new AgentSupervisor(paths, store, emergency, logger);
+        var supervisor = new AgentSupervisor(
+            paths,
+            store,
+            emergency,
+            logger);
+        var updateService = new ManagerUpdateService(
+            paths,
+            logger);
 
-        var background = args.Contains("--background", StringComparer.OrdinalIgnoreCase);
-        using var form = new MainForm(paths, store, supervisor, background);
+        var background = args.Contains(
+            "--background",
+            StringComparer.OrdinalIgnoreCase);
+        using var form = new MainForm(
+            paths,
+            store,
+            supervisor,
+            updateService,
+            background);
 
         try
         {
@@ -69,7 +108,96 @@ internal static class Program
         }
         finally
         {
-            supervisor.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            supervisor.DisposeAsync()
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
         }
+    }
+
+    private static async Task<int> RunUpdateHealthCheckAsync(
+        ManagerPaths paths)
+    {
+        paths.EnsureDirectories();
+
+        var store = new ManagerConfigurationStore(paths);
+        var emergency = new EmergencyStopStore(
+            paths.EmergencyStopPath);
+
+        if (emergency.IsEngaged)
+        {
+            return 31;
+        }
+
+        var logger = new ManagerLogger(paths.LogPath);
+        await using var supervisor = new AgentSupervisor(
+            paths,
+            store,
+            emergency,
+            logger);
+
+        await supervisor.StartAsync();
+
+        var deadline =
+            DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var snapshot = supervisor.Snapshot;
+
+            if (snapshot.AgentState == "HEALTHY" &&
+                snapshot.QueueConnectivity == "connected")
+            {
+                return 0;
+            }
+
+            if (snapshot.ManagerState is
+                "ERROR" or
+                "CONFIG_REQUIRED" or
+                "CRASH_LOOP")
+            {
+                return 32;
+            }
+
+            await Task.Delay(500);
+        }
+
+        return 33;
+    }
+
+    private static bool TryGetOption(
+        IReadOnlyList<string> args,
+        string name,
+        out string? value)
+    {
+        for (var index = 0; index < args.Count - 1; index++)
+        {
+            if (args[index].Equals(
+                    name,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                value = args[index + 1];
+                return !string.IsNullOrWhiteSpace(value);
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static bool TryGetIntOption(
+        IReadOnlyList<string> args,
+        string name,
+        out int value)
+    {
+        if (TryGetOption(args, name, out var text) &&
+            int.TryParse(text, out value) &&
+            value > 0)
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
     }
 }
