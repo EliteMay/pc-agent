@@ -83,3 +83,17 @@ Task budgets bound:
 `observe` and `verify` phases may use read-only tools only. `act` phases must use locally governed write or development tools. A task cannot finish as `succeeded` unless its latest completed phase is a successful `verify` step.
 
 The gateway stores only task/step audit metadata. It intentionally does not duplicate full tool arguments or full tool results in the task tables. If the same normalized failure fingerprint occurs twice consecutively, the task transitions to `blocked` and further execution is rejected.
+
+
+## OAuth repository repair workflow
+
+Gateway v8 tightens task semantics for real repository repair work:
+
+- Observe may use ordinary read-only tools and approved Git inspection commands.
+- Act may use the existing locally approved safe-write tools only.
+- Verify may use ordinary read-only tools plus approved Git inspection, `npm test`, or `node --test`.
+- Development Runner commands still require explicit local Manager approval.
+- A successful task step records a SHA-256 fingerprint of its structured result in the task audit tables; full command output is not duplicated there.
+- A task cannot finish as `succeeded` without a final successful Verify step carrying result evidence.
+
+The Agent now treats every non-zero development command exit code as a tool failure. This makes test failure and Git validation failure visible to the task loop instead of allowing a failed command to satisfy completion criteria.
