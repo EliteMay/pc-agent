@@ -39,6 +39,32 @@ public sealed class ManagerConfigurationStore
         return config;
     }
 
+    public LegacyDeviceCredentialImportResult TryAutoImportLegacyCredentials()
+    {
+        var config = Load();
+
+        if (Guid.TryParse(config.DeviceId, out _) &&
+            !string.IsNullOrWhiteSpace(config.DeviceToken))
+        {
+            return LegacyDeviceCredentialImportResult.NotFound;
+        }
+
+        var result = LegacyDeviceCredentialImporter
+            .CreateDefault()
+            .TryFind();
+
+        if (!result.Found)
+        {
+            return result;
+        }
+
+        config.DeviceId = result.DeviceId;
+        config.DeviceToken = result.DeviceToken;
+        Save(config);
+
+        return result;
+    }
+
     public void Save(AgentConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(config);

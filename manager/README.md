@@ -39,10 +39,12 @@ Persistent state is stored under:
 ## First start
 
 1. Open `PcAgentManager.exe`.
-2. Enter the device UUID and device token once.
-3. Confirm the Supabase device endpoint and allowed roots.
-4. Save.
-5. Press **Start**.
+2. On first run, the Manager automatically looks for a compatible existing PC Agent `device.json` under common local configuration roots.
+3. If found, Device ID / Token are imported automatically and the token is immediately saved with Windows DPAPI.
+4. Confirm the Supabase device endpoint and allowed roots only if the settings screen is shown.
+5. Press **Start** if Agent auto-start is disabled.
+
+The settings screen also has **既存Agent設定を自動検出** for a manual retry. The importer validates that the legacy configuration belongs to the expected Supabase project before accepting it.
 
 The current personal deployment defaults the endpoint to the neutral `pc-agent-device` Edge Function. No administrator privilege is requested.
 

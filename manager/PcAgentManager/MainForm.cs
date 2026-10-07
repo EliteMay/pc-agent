@@ -141,6 +141,29 @@ public sealed class MainForm : Form
         var config = _configStore.Load();
         var validation = AgentConfigurationValidator.Validate(config);
 
+        if (!validation.IsValid &&
+            (string.IsNullOrWhiteSpace(config.DeviceId) ||
+             string.IsNullOrWhiteSpace(config.DeviceToken)))
+        {
+            var imported = _configStore.TryAutoImportLegacyCredentials();
+
+            if (imported.Found)
+            {
+                config = _configStore.Load();
+                validation = AgentConfigurationValidator.Validate(config);
+
+                if (!_backgroundStart)
+                {
+                    MessageBox.Show(
+                        this,
+                        "既存のPC Agent設定を自動で移行しました。Device ID / Token の入力は不要です。",
+                        "PC Agent",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+        }
+
         if (!validation.IsValid)
         {
             Show();
