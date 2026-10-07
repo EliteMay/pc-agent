@@ -1,0 +1,338 @@
+using PcAgentManager.Configuration;
+using PcAgentManager.Models;
+using PcAgentManager.Services;
+using PcAgentManager.Supervision;
+
+namespace PcAgentManager;
+
+public sealed class MainForm : Form
+{
+    private readonly ManagerPaths _paths;
+    private readonly ManagerConfigurationStore _configStore;
+    private readonly AgentSupervisor _supervisor;
+    private readonly bool _backgroundStart;
+
+    private readonly Label _agentValue = ValueLabel();
+    private readonly Label _supabaseValue = ValueLabel();
+    private readonly Label _heartbeatValue = ValueLabel();
+    private readonly Label _versionValue = ValueLabel();
+    private readonly Label _errorValue = ValueLabel();
+    private readonly Button _start = ActionButton("Start");
+    private readonly Button _stop = ActionButton("Stop");
+    private readonly Button _restart = ActionButton("Restart");
+    private readonly Button _diagnose = ActionButton("Diagnose");
+    private readonly Button _configure = ActionButton("設定");
+    private readonly Button _emergency = ActionButton("EMERGENCY STOP");
+    private readonly Button _resume = ActionButton("Emergency Stop解除");
+    private readonly NotifyIcon _tray = new();
+    private bool _allowExit;
+
+    public MainForm(
+        ManagerPaths paths,
+        ManagerConfigurationStore configStore,
+        AgentSupervisor supervisor,
+        bool backgroundStart)
+    {
+        _paths = paths;
+        _configStore = configStore;
+        _supervisor = supervisor;
+        _backgroundStart = backgroundStart;
+
+        Text = "PC Agent Manager";
+        Size = new Size(620, 500);
+        MinimumSize = new Size(560, 450);
+        StartPosition = FormStartPosition.CenterScreen;
+        BackColor = Color.FromArgb(18, 18, 18);
+        ForeColor = Color.Gainsboro;
+
+        var title = new Label
+        {
+            Text = "PC Agent",
+            Font = new Font(Font.FontFamily, 22, FontStyle.Bold),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 18)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(24),
+            ColumnCount = 1,
+            AutoScroll = true
+        };
+
+        root.Controls.Add(title);
+
+        var status = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            AutoSize = true
+        };
+        status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        AddStatus(status, "Agent", _agentValue);
+        AddStatus(status, "Supabase", _supabaseValue);
+        AddStatus(status, "Heartbeat", _heartbeatValue);
+        AddStatus(status, "Version", _versionValue);
+        AddStatus(status, "Last error", _errorValue);
+        root.Controls.Add(status);
+
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            Margin = new Padding(0, 20, 0, 0)
+        };
+        actions.Controls.AddRange([_start, _stop, _restart, _diagnose, _configure]);
+        root.Controls.Add(actions);
+
+        _emergency.BackColor = Color.FromArgb(110, 25, 25);
+        _emergency.ForeColor = Color.White;
+        _emergency.Margin = new Padding(0, 24, 8, 0);
+        _resume.Margin = new Padding(0, 24, 8, 0);
+
+        var emergencyRow = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Top
+        };
+        emergencyRow.Controls.Add(_emergency);
+        emergencyRow.Controls.Add(_resume);
+        root.Controls.Add(emergencyRow);
+
+        Controls.Add(root);
+
+        _start.Click += async (_, _) => await _supervisor.StartAsync();
+        _stop.Click += async (_, _) => await _supervisor.StopAsync();
+        _restart.Click += async (_, _) => await _supervisor.RestartAsync();
+        _emergency.Click += async (_, _) =>
+        {
+            if (MessageBox.Show(
+                    this,
+                    "Agentを停止し、自動再起動をロックします。解除するまで再開しません。",
+                    "Emergency Stop",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning) == DialogResult.OK)
+            {
+                await _supervisor.EmergencyStopAsync();
+            }
+        };
+        _resume.Click += (_, _) =>
+        {
+            _supervisor.ClearEmergencyStop();
+            Render(_supervisor.Snapshot);
+        };
+        _diagnose.Click += (_, _) => ShowDiagnostics();
+        _configure.Click += (_, _) => ShowConfiguration();
+
+        _supervisor.SnapshotChanged += SupervisorOnSnapshotChanged;
+
+        ConfigureTray();
+        FormClosing += MainFormClosing;
+        Shown += MainFormShown;
+
+        Render(_supervisor.Snapshot);
+    }
+
+    private async void MainFormShown(object? sender, EventArgs e)
+    {
+        var config = _configStore.Load();
+        var validation = AgentConfigurationValidator.Validate(config);
+
+        if (!validation.IsValid)
+        {
+            Show();
+            Activate();
+            ShowConfiguration();
+            return;
+        }
+
+        if (_backgroundStart)
+        {
+            Hide();
+        }
+
+        if (config.AutoStartAgent && !_supervisor.Snapshot.EmergencyStopped)
+        {
+            await _supervisor.StartAsync();
+        }
+    }
+
+    private void SupervisorOnSnapshotChanged(object? sender, ManagerSnapshot snapshot)
+    {
+        if (IsDisposed) return;
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => Render(snapshot));
+        }
+        else
+        {
+            Render(snapshot);
+        }
+    }
+
+    private void Render(ManagerSnapshot snapshot)
+    {
+        _agentValue.Text = snapshot.AgentState;
+        _supabaseValue.Text = snapshot.QueueConnectivity;
+        _heartbeatValue.Text = snapshot.LastHeartbeat is null
+            ? "未確認"
+            : $"{Math.Max(0, (DateTimeOffset.UtcNow - snapshot.LastHeartbeat.Value).TotalSeconds):0}s ago";
+        _versionValue.Text = string.IsNullOrWhiteSpace(snapshot.AgentVersion)
+            ? "-"
+            : snapshot.AgentVersion;
+        _errorValue.Text = snapshot.LastError ?? "-";
+
+        _start.Enabled = !snapshot.EmergencyStopped &&
+            snapshot.ManagerState is not "RUNNING";
+        _stop.Enabled = snapshot.ProcessId is not null;
+        _restart.Enabled = !snapshot.EmergencyStopped &&
+            snapshot.ProcessId is not null;
+        _emergency.Enabled = !snapshot.EmergencyStopped;
+        _resume.Enabled = snapshot.EmergencyStopped;
+    }
+
+    private void ShowConfiguration()
+    {
+        var existing = _configStore.Load();
+        using var dialog = new ConfigurationDialog(existing);
+
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result is null)
+        {
+            return;
+        }
+
+        _configStore.Save(dialog.Result);
+
+        try
+        {
+            StartupRegistration.SetEnabled(dialog.Result.AutoStartManager);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                "設定は保存しましたがWindows自動起動の更新に失敗しました。\n" + ex.Message,
+                "PC Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        MessageBox.Show(
+            this,
+            "設定を保存しました。Agent設定の変更はRestartで反映されます。",
+            "PC Agent",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private void ShowDiagnostics()
+    {
+        var text = _supervisor.BuildDiagnostics();
+        using var dialog = new Form
+        {
+            Text = "PC Agent Diagnostic",
+            Size = new Size(720, 520),
+            StartPosition = FormStartPosition.CenterParent,
+            BackColor = Color.FromArgb(18, 18, 18),
+            ForeColor = Color.Gainsboro
+        };
+
+        var box = new TextBox
+        {
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            Dock = DockStyle.Fill,
+            Text = text,
+            BackColor = Color.FromArgb(28, 28, 28),
+            ForeColor = Color.WhiteSmoke,
+            Font = new Font("Consolas", 10)
+        };
+
+        var copy = ActionButton("コピー");
+        copy.Dock = DockStyle.Bottom;
+        copy.Click += (_, _) => Clipboard.SetText(box.Text);
+
+        dialog.Controls.Add(box);
+        dialog.Controls.Add(copy);
+        dialog.ShowDialog(this);
+    }
+
+    private void ConfigureTray()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("開く", null, (_, _) =>
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        });
+        menu.Items.Add("Agent Start", null, async (_, _) => await _supervisor.StartAsync());
+        menu.Items.Add("Agent Stop", null, async (_, _) => await _supervisor.StopAsync());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("終了", null, async (_, _) =>
+        {
+            _allowExit = true;
+            await _supervisor.StopAsync();
+            _tray.Visible = false;
+            Close();
+        });
+
+        _tray.Text = "PC Agent Manager";
+        _tray.Icon = SystemIcons.Application;
+        _tray.ContextMenuStrip = menu;
+        _tray.Visible = true;
+        _tray.DoubleClick += (_, _) =>
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        };
+    }
+
+    private void MainFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (_allowExit || e.CloseReason == CloseReason.WindowsShutDown)
+        {
+            _tray.Visible = false;
+            return;
+        }
+
+        e.Cancel = true;
+        Hide();
+    }
+
+    private static void AddStatus(TableLayoutPanel table, string name, Label value)
+    {
+        table.Controls.Add(new Label
+        {
+            Text = name,
+            AutoSize = true,
+            Margin = new Padding(0, 7, 10, 7),
+            ForeColor = Color.DarkGray
+        });
+        value.Margin = new Padding(0, 7, 0, 7);
+        table.Controls.Add(value);
+    }
+
+    private static Label ValueLabel() => new()
+    {
+        AutoSize = true,
+        Text = "-"
+    };
+
+    private static Button ActionButton(string text) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        Padding = new Padding(12, 6, 12, 6),
+        Margin = new Padding(0, 0, 8, 8),
+        BackColor = Color.FromArgb(45, 45, 45),
+        ForeColor = Color.WhiteSmoke,
+        FlatStyle = FlatStyle.Flat
+    };
+}

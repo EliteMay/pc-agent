@@ -1,15 +1,67 @@
-# Manager
+# PC Agent Manager
 
-The Manager will be a thin C#/.NET supervisor for the Node.js Agent.
+The production Windows supervisor for the Node.js PC Agent.
 
-Responsibilities:
+## Current MVP
 
-- Start / Stop / Restart Agent
-- heartbeat and health reporting
-- crash-loop recovery
-- tray/startup integration
-- diagnostics
-- local Emergency Stop
-- update / rollback
+The Manager is a normal-user .NET 8 WinForms application and provides:
 
-The Manager must not implement capability, path, risk, or command authorization logic. Those remain in the Agent.
+- Start / Stop / Restart
+- Named Pipe health monitoring
+- Agent heartbeat and queue-connectivity display
+- crash recovery with exponential backoff
+- crash-loop detection
+- Windows Job Object containment with kill-on-manager-exit
+- persistent local Emergency Stop
+- system-tray operation
+- optional Windows login startup under the current user
+- diagnostics view and copy button
+- DPAPI-encrypted device-token storage
+- portable self-contained Windows build with a bundled Node.js runtime
+
+The Manager is only a supervisor. It does **not** implement Tool Registry, capability, path, risk, or remote-command authorization rules.
+
+## Local data
+
+Persistent state is stored under:
+
+```text
+%LOCALAPPDATA%\PcAgent\
+  manager.json
+  device-token.bin
+  journal.sqlite
+  emergency-stop.lock
+  manager.log
+```
+
+`device-token.bin` is protected with Windows DPAPI for the current user. The plaintext token is passed only to the child Agent process environment and is never written into `manager.json` or logs.
+
+## First start
+
+1. Open `PcAgentManager.exe`.
+2. Enter the device UUID and device token once.
+3. Confirm the Supabase device endpoint and allowed roots.
+4. Save.
+5. Press **Start**.
+
+The current personal deployment defaults the endpoint to the neutral `pc-agent-device` Edge Function. No administrator privilege is requested.
+
+## Emergency Stop
+
+**EMERGENCY STOP** immediately disables automatic restart and stops the Agent. The lock persists across Manager/Windows restarts.
+
+Recovery requires pressing **Emergency Stop解除** locally in the Manager UI.
+
+## Portable bundle
+
+GitHub Actions produces `pc-agent-manager-win-x64` containing:
+
+```text
+PcAgentManager.exe
+Runtime\node.exe
+Agent\bin\pc-agent.js
+Agent\src\...
+SHA256SUMS.txt
+```
+
+The .NET runtime and Node.js runtime are bundled, so normal use does not require PowerShell, a separate .NET install, or a separate Node.js install.
