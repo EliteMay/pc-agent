@@ -103,6 +103,7 @@ export function createListProcessesTool() {
     version: "1",
     capability: Capabilities.PROCESS_INSPECT,
     risk: "low",
+    confirmation: "none",
     description: "Return executable image names and process IDs using the fixed Windows tasklist binary.",
     async execute(args) {
       requireWindows();
