@@ -48,3 +48,37 @@ public sealed record ManagerSnapshot(
         emergency,
         0);
 }
+
+
+public sealed class PendingApprovalSnapshot
+{
+    [JsonPropertyName("command_id")]
+    public string CommandId { get; set; } = "";
+
+    [JsonPropertyName("operation_id")]
+    public string OperationId { get; set; } = "";
+
+    [JsonPropertyName("tool")]
+    public string Tool { get; set; } = "";
+
+    [JsonPropertyName("risk")]
+    public string Risk { get; set; } = "";
+
+    [JsonPropertyName("summary")]
+    public System.Text.Json.JsonElement Summary { get; set; }
+
+    [JsonPropertyName("requested_at")]
+    public string RequestedAt { get; set; } = "";
+
+    [JsonPropertyName("expires_at")]
+    public string ExpiresAt { get; set; } = "";
+}
+
+public sealed class ApprovalResponseSnapshot
+{
+    [JsonPropertyName("accepted")]
+    public bool Accepted { get; set; }
+
+    [JsonPropertyName("code")]
+    public string? Code { get; set; }
+}
