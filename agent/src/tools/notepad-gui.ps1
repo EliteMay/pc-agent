@@ -48,7 +48,8 @@ public static class PcAgentNotepadInput {
         // Attach temporarily to the actual foreground thread so an approved
         // GUI command can direct input to its verified Notepad window.
         var foreground = GetForegroundWindow();
-        uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, out _);
+        uint ignoredProcessId = 0;
+        uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, out ignoredProcessId);
         uint currentThread = GetCurrentThreadId();
         bool attached = foregroundThread != 0 && foregroundThread != currentThread
             && AttachThreadInput(currentThread, foregroundThread, true);
