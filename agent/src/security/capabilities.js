@@ -4,6 +4,7 @@ export const Capabilities = Object.freeze({
   FILE_DELETE: "file.delete",
   PROCESS_INSPECT: "process.inspect",
   SCREEN_CAPTURE: "screen.capture",
+  GUI_INPUT: "gui.input",
   PROCESS_START: "process.start",
   PROCESS_STOP: "process.stop",
   COMMAND_DEVELOPMENT: "command.development",

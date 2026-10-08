@@ -35,4 +35,16 @@ jobs:
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'agent/src/tools/capture-notepad.ps1').Path, [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors.Count -gt 0) { throw (($errors | ForEach-Object { $_.ToString() }) -join "`n") }
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'agent/src/tools/notepad-gui.ps1').Path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw (($errors | ForEach-Object { $_.ToString() }) -join "`n") }
+      - name: Compile fixed Notepad GUI Win32 helper without executing it
+        shell: pwsh
+        run: |
+          $source = Get-Content 'agent/src/tools/notepad-gui.ps1' -Raw
+          $match = [regex]::Match($source, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@")
+          if (-not $match.Success) { throw 'C# helper source not found' }
+          Add-Type -TypeDefinition $match.Groups[1].Value -ErrorAction Stop
+
 

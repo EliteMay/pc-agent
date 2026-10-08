@@ -56,12 +56,12 @@ test("safe write tools require local confirmation", () => {
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ["create_directory", "edit_text_file", "write_text_file"]
+      ["create_directory", "edit_text_file", "notepad_gui", "write_text_file"]
     );
 
     for (const tool of tools) {
-      assert.equal(tool.capability, "file.write");
-      assert.equal(tool.risk, "medium");
+      assert.equal(tool.capability, tool.name === "notepad_gui" ? "gui.input" : "file.write");
+      assert.equal(tool.risk, tool.name === "notepad_gui" ? "high" : "medium");
       assert.equal(tool.confirmation, "required");
       assert.equal(typeof tool.approvalSummary, "function");
     }

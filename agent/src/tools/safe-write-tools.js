@@ -1,3 +1,4 @@
+import { createNotepadGuiTool } from "./notepad-gui.js";
 import { createCreateDirectoryTool } from "./create-directory.js";
 import { createWriteTextFileTool } from "./write-text-file.js";
 import { createEditTextFileTool } from "./edit-text-file.js";
@@ -16,6 +17,7 @@ export function registerSafeWriteTools(registry, options = {}) {
     );
   }
 
+  registry.register(createNotepadGuiTool({ allowedRoots: [...allowedRoots] }));
   registry.register(createCreateDirectoryTool({
     allowedRoots: [...allowedRoots]
   }));

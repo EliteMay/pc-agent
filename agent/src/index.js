@@ -3,6 +3,7 @@ export {
   registerReadOnlyTools,
   ReadOnlyToolError
 } from "./tools/read-only-tools.js";
+export { createNotepadGuiTool, validateNotepadGuiArgs, parseNotepadGuiResult } from "./tools/notepad-gui.js";
 export { createCaptureNotepadTool, parseNotepadCapture } from "./tools/capture-notepad.js";
 export { parseTasklistCsv } from "./tools/list-processes.js";
 export {
