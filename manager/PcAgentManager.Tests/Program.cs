@@ -2407,6 +2407,130 @@ Run("Windows ACL pipe rejects a genuinely different local user by kernel access 
     Require(authorizedClient.IsConnected, "owner still connects after denial");
 });
 
+
+Run("Manager protected status pipe accepts only versioned read-only PING", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    static string Query(string name, string query)
+    {
+        using var client = new NamedPipeClientStream(
+            ".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+        client.Connect(2000);
+        client.ReadTimeout = 3000;
+        client.WriteTimeout = 3000;
+
+        var message = Encoding.ASCII.GetBytes(query + "\n");
+        client.Write(message);
+        client.Flush();
+
+        using var reader = new StreamReader(
+            client, Encoding.ASCII, false, 1024, leaveOpen: true);
+        return reader.ReadLine()
+            ?? throw new InvalidDataException("Protected Manager endpoint closed without reply");
+    }
+
+    var first = ManagerProtectedPipeHost.Start();
+    try
+    {
+        Require(first.PipeName.StartsWith("PcAgentMgrSafe-", StringComparison.Ordinal),
+            "Manager owner-only endpoint must use a dedicated prefix");
+        Equal("PONG 1", Query(first.PipeName, "PING 1"), "valid status handshake");
+        Equal("DENIED", Query(first.PipeName, "PING 0"), "wrong version must be denied");
+        Equal("DENIED", Query(first.PipeName, "move_path"), "filesystem commands must be denied");
+        Equal("DENIED", Query(first.PipeName, "approve"), "approvals cannot be issued by status endpoint");
+        Equal("DENIED", Query(first.PipeName, new string('Z', 40)),
+            "oversized requests must fail closed");
+        Equal("PONG 1", Query(first.PipeName, "PING 1"),
+            "the original protected pipe must remain usable after denied requests");
+
+        var owner = System.Security.Principal.WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Missing Windows SID");
+        using var inspector = new NamedPipeClientStream(
+            ".", first.PipeName, PipeDirection.InOut);
+        inspector.Connect(2000);
+        Require(inspector.IsConnected,
+            "same user must still access protected Manager listener");
+    }
+    finally
+    {
+        first.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    using var cancelled = new NamedPipeClientStream(
+        ".", first.PipeName, PipeDirection.InOut);
+    var connectDenied = false;
+    try
+    {
+        cancelled.Connect(100);
+    }
+    catch (Exception exception) when (exception is TimeoutException
+        or IOException or UnauthorizedAccessException)
+    {
+        connectDenied = true;
+    }
+    Require(connectDenied, "disposing Manager endpoint must close its pipe");
+});
+
+Run("Manager protected status pipe has a fresh name per instance and no mutation RPC", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var first = ManagerProtectedPipeHost.Start();
+    var second = ManagerProtectedPipeHost.Start();
+
+    try
+    {
+        Require(!string.Equals(first.PipeName, second.PipeName, StringComparison.Ordinal),
+            "two Manager-owned pipes must use different random names");
+        Equal(32, first.PipeName["PcAgentMgrSafe-".Length..].Length,
+            "new pipe name has 128-bit random suffix");
+        Require(first.PipeName["PcAgentMgrSafe-".Length..].All(Uri.IsHexDigit),
+            "name suffix must be hex");
+    }
+    finally
+    {
+        second.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        first.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+});
+
+Run("Manager protected pipe denies a genuine different Windows account", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var alternateUser = Environment.GetEnvironmentVariable("PC_AGENT_TEST_ALT_USER");
+    var password = Environment.GetEnvironmentVariable("PC_AGENT_TEST_ALT_PASSWORD");
+    var required = Environment.GetEnvironmentVariable("PC_AGENT_REQUIRE_ALT_USER_TEST") == "1";
+
+    if (string.IsNullOrWhiteSpace(alternateUser)
+        || string.IsNullOrWhiteSpace(password))
+    {
+        if (required)
+        {
+            throw new InvalidOperationException(
+                "Cross-user ACL probe is mandatory, but no alternate account is available.");
+        }
+
+        Console.WriteLine("SKIP Manager status cross-user ACL probe: no separate Windows account");
+        return;
+    }
+
+    var host = ManagerProtectedPipeHost.Start();
+    try
+    {
+        var owner = System.Security.Principal.WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Missing Windows SID");
+        // This is the ACTUAL Manager-owned listener, not the older test fixture.
+        WindowsCrossUserPipeProbe.AssertDifferentLocalUserDenied(
+            host.PipeName, owner, alternateUser, password);
+    }
+    finally
+    {
+        host.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
