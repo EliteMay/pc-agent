@@ -2161,6 +2161,101 @@ Run("Manager creates unique unpredictable private Agent pipe names", () =>
     Require(!first.Contains('\\'), "pipe name must contain no path separators");
 });
 
+
+Run("Manager rejects an IPC reply with a different request ID", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var pipeName = "PcAgent-MismatchedReply-" + Guid.NewGuid().ToString("N");
+    using var server = new NamedPipeServerStream(
+        pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+        PipeOptions.Asynchronous);
+
+    var serverTask = Task.Run(async () =>
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await server.WaitForConnectionAsync(timeout.Token);
+        using var reader = new StreamReader(
+            server, new UTF8Encoding(false), false, 4096, leaveOpen: true);
+        using var writer = new StreamWriter(
+            server, new UTF8Encoding(false), 4096, leaveOpen: true)
+        {
+            AutoFlush = true
+        };
+
+        _ = await reader.ReadLineAsync(timeout.Token);
+        await writer.WriteLineAsync(
+            "{\"id\":\"forged-reply-id\",\"ok\":true,\"result\":{\"version\":\"forged\"}}");
+    });
+
+    var rejected = false;
+    try
+    {
+        _ = new NamedPipeAgentClient(pipeName).GetHealthAsync()
+            .GetAwaiter().GetResult();
+    }
+    catch (InvalidDataException)
+    {
+        rejected = true;
+    }
+
+    serverTask.GetAwaiter().GetResult();
+    Require(rejected, "a mismatched reply ID must not be trusted");
+});
+
+Run("Manager rejects oversized local IPC replies before parsing JSON", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var pipeName = "PcAgent-OversizedReply-" + Guid.NewGuid().ToString("N");
+    using var server = new NamedPipeServerStream(
+        pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+        PipeOptions.Asynchronous);
+
+    var serverTask = Task.Run(async () =>
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await server.WaitForConnectionAsync(timeout.Token);
+        using var reader = new StreamReader(
+            server, new UTF8Encoding(false), false, 4096, leaveOpen: true);
+        using var writer = new StreamWriter(
+            server, new UTF8Encoding(false), 4096, leaveOpen: true)
+        {
+            AutoFlush = true
+        };
+
+        var frame = await reader.ReadLineAsync(timeout.Token)
+            ?? throw new InvalidDataException("Missing Manager request");
+        using var parsed = JsonDocument.Parse(frame);
+        var id = parsed.RootElement.GetProperty("id").GetString();
+        var oversized = JsonSerializer.Serialize(new
+        {
+            id,
+            ok = true,
+            result = new
+            {
+                version = new string('x', 20_000),
+                protocol_version = 1
+            }
+        });
+        await writer.WriteLineAsync(oversized);
+    });
+
+    var rejected = false;
+    try
+    {
+        _ = new NamedPipeAgentClient(pipeName).GetHealthAsync()
+            .GetAwaiter().GetResult();
+    }
+    catch (InvalidDataException)
+    {
+        rejected = true;
+    }
+
+    serverTask.GetAwaiter().GetResult();
+    Require(rejected, "a large IPC reply must be refused before deserialization");
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
