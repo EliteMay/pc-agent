@@ -729,6 +729,106 @@ Run("Windows approval snapshot refuses source outside its allowed root", () =>
     }
 });
 
+
+Run("Windows approval snapshot refuses a destination junction swap outside the root", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var sandbox = Path.Combine(
+        Path.GetTempPath(),
+        "PcAgentMoveJunctionTests",
+        Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(sandbox, "allowed");
+    var outside = Path.Combine(sandbox, "outside");
+    var destinationParent = Path.Combine(allowed, "incoming");
+    var displacedParent = Path.Combine(allowed, "original-incoming");
+    Directory.CreateDirectory(destinationParent);
+    Directory.CreateDirectory(outside);
+
+    try
+    {
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(destinationParent, "moved.txt");
+        var outsideDestination = Path.Combine(outside, "moved.txt");
+        File.WriteAllText(source, "keep this inside approved roots");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, allowed);
+
+        var hookCompleted = false;
+        var rejected = false;
+
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source,
+                destination,
+                beforeNativeRename: () =>
+                {
+                    Directory.Move(destinationParent, displacedParent);
+
+                    // Test-only Windows directory junction to an outside fixture.
+                    // The Agent does NOT execute cmd.exe or arbitrary shell commands.
+                    var command = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = "/d /c mklink /J \"" + destinationParent
+                            + "\" \"" + outside + "\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    };
+                    using var process = System.Diagnostics.Process.Start(command)
+                        ?? throw new InvalidOperationException("Could not start junction fixture");
+                    var output = process.StandardOutput.ReadToEnd();
+                    var error = process.StandardError.ReadToEnd();
+                    Require(process.WaitForExit(10_000), "junction setup timed out");
+                    Equal(0, process.ExitCode, "junction fixture: " + output + error);
+
+                    hookCompleted = true;
+                },
+                approved: approved);
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+
+        Require(hookCompleted, "the junction must actually have been created");
+        Require(rejected, "approved destination parent must not be redirected");
+        Equal(
+            "keep this inside approved roots",
+            File.ReadAllText(source),
+            "source must survive");
+        Require(!File.Exists(outsideDestination), "nothing may appear outside allowed roots");
+
+        // Reusing the junction at the approval stage must also be denied.
+        var captureRefused = false;
+        try
+        {
+            _ = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+                source, destination, allowed);
+        }
+        catch (InvalidOperationException)
+        {
+            captureRefused = true;
+        }
+        Require(captureRefused, "a junction parent must fail at approval capture");
+    }
+    finally
+    {
+        // Remove the junction itself, not the target directory.
+        if (Directory.Exists(destinationParent) &&
+            (File.GetAttributes(destinationParent) & FileAttributes.ReparsePoint) != 0)
+        {
+            Directory.Delete(destinationParent);
+        }
+
+        Directory.Delete(sandbox, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
