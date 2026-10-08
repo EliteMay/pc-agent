@@ -411,6 +411,63 @@ internal static class WindowsNoReplaceMovePrototype
 
         try
         {
+            // Research-only fail-closed guard: protect each ancestor ABOVE
+            // the allowed root too, down from the volume root. Without this,
+            // an attacker could rename the entire approved root subtree
+            // while all handles INSIDE the subtree remained stable.
+            // This may fail on restricted volumes and is not suitable for
+            // production without an explicit platform/support policy.
+            var volumeRoot = Path.GetPathRoot(root)
+                ?? throw new InvalidOperationException("Missing volume root.");
+            var relativeRoot = Path.GetRelativePath(volumeRoot, root);
+            var volumeComponents = relativeRoot == "."
+                ? Array.Empty<string>()
+                : relativeRoot.Split(Path.DirectorySeparatorChar);
+
+            var guardedAncestor = volumeRoot;
+            GuardAncestor(guardedAncestor);
+
+            foreach (var component in volumeComponents)
+            {
+                if (component.Length == 0 || component is "." or ".."
+                    || component.Contains(':'))
+                {
+                    throw new InvalidOperationException(
+                        "Unexpected ancestor component above approved root.");
+                }
+
+                guardedAncestor = Path.Combine(guardedAncestor, component);
+                GuardAncestor(guardedAncestor);
+            }
+
+            void GuardAncestor(string ancestor)
+            {
+                if (!opened.Add(ancestor)) return;
+
+                var handle = OpenFile(
+                    ancestor,
+                    FileReadAttributes | FileTraverse,
+                    FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+                    ShareReadWrite);
+
+                try
+                {
+                    EnsurePlainDirectory(handle, "Root ancestor");
+                    if (!PathEquals(FinalPath(handle), ancestor))
+                    {
+                        throw new InvalidOperationException(
+                            "Approved root ancestor is a redirected path.");
+                    }
+
+                    guards.Add(handle);
+                }
+                catch
+                {
+                    handle.Dispose();
+                    throw;
+                }
+            }
+
             // Hold the approved root and each traversed directory. A parent
             // can otherwise be relocated even if its immediate child handle
             // remains open. Avoid traversal via intermediate junction entries.
