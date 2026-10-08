@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -15,6 +16,28 @@ function pathKey(value) {
     .normalize(String(value).trim())
     .replace(/[\\/]+$/, "")
     .toLocaleLowerCase("en-US");
+}
+
+// Fingerprint identity and metadata. This is a safety comparison, not a
+// filesystem lock: a race is still possible between checking and mutation.
+export function fingerprintPathStats(stats) {
+  if (!stats || typeof stats.ino !== "bigint") {
+    throw new TypeError("fingerprintPathStats requires bigint fs.Stats.");
+  }
+
+  const fields = [
+    stats.dev,
+    stats.ino,
+    stats.size,
+    stats.mode,
+    stats.mtimeNs,
+    stats.ctimeNs,
+    stats.birthtimeNs
+  ];
+
+  return createHash("sha256")
+    .update(fields.map(String).join("|"))
+    .digest("hex");
 }
 
 export function requireSourceDestinationArgs(args) {
