@@ -1,23 +1,32 @@
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { resolveExistingPathWithinAllowedRoots, isSensitivePath } from "../security/path-policy.js";
 import path from "node:path";
 import { promisify } from "node:util";
 import { Capabilities } from "../security/capabilities.js";
 import { ReadOnlyToolError, requireObjectArgs } from "./read-only-common.js";
 
 const execFileAsync = promisify(execFile);
-const ACTIONS = new Set(["click", "type", "scroll", "save"]);
+const ACTIONS = new Set(["open", "click", "type", "scroll", "save"]);
 const OUTPUT_LIMIT = 4096;
 const ACTION_TIMEOUT_MS = 20_000;
 
 export function validateNotepadGuiArgs(args) {
-  requireObjectArgs(args, ["action", "x", "y", "text", "direction", "steps"]);
+  requireObjectArgs(args, ["action", "x", "y", "text", "direction", "steps", "path"]);
   if (!ACTIONS.has(args.action)) {
     throw new ReadOnlyToolError("Notepad action is not supported.", "INVALID_ARGUMENTS");
   }
 
   let expectedKeys;
   switch (args.action) {
+    case "open":
+      expectedKeys = ["action", "path"];
+      if (typeof args.path !== "string" || args.path.length < 6 || args.path.length > 512
+        || !path.win32.isAbsolute(args.path) || path.win32.extname(args.path).toLowerCase() !== ".txt"
+        || /[\u0000-\u001f\u007f]/u.test(args.path)) {
+        throw new ReadOnlyToolError("open requires an absolute .txt file path.", "INVALID_ARGUMENTS");
+      }
+      break;
     case "click":
       expectedKeys = ["action", "x", "y"];
       if (![args.x, args.y].every((v) => Number.isSafeInteger(v) && v >= 0 && v <= 3840)) {
@@ -81,12 +90,26 @@ export function parseNotepadGuiResult(stdout, action) {
 export function createNotepadGuiTool({
   platform = process.platform,
   env = process.env,
-  runCommand = execFileAsync
+  runCommand = execFileAsync,
+  allowedRoots = []
 } = {}) {
   function assertPlatform() {
     if (platform !== "win32") {
       throw new ReadOnlyToolError("GUI input requires an interactive Windows session.", "UNSUPPORTED_PLATFORM");
     }
+  }
+
+  function checkFileAllowed(args) {
+    if (args.action !== "open") return args;
+    const canonical = resolveExistingPathWithinAllowedRoots(args.path, allowedRoots);
+    if (isSensitivePath(args.path) || isSensitivePath(canonical)) {
+      throw new ReadOnlyToolError("Sensitive paths are not permitted.", "SENSITIVE_PATH");
+    }
+    const info = statSync(canonical);
+    if (!info.isFile() || info.size > 1024 * 1024) {
+      throw new ReadOnlyToolError("Only existing text files up to 1 MiB can be opened.", "INVALID_OPEN_FILE");
+    }
+    return Object.freeze({ ...args, path: canonical });
   }
 
   return {
@@ -95,15 +118,16 @@ export function createNotepadGuiTool({
     capability: Capabilities.GUI_INPUT,
     risk: "high",
     confirmation: "required",
-    description: "Send one limited click, text, scroll, or Ctrl+S to the sole visible Notepad window, with fresh local approval.",
+    description: "Send one limited open, click, text, scroll, or Ctrl+S to the sole visible Notepad window, with fresh local approval.",
     approvalSummary(args) {
       assertPlatform();
-      const value = validateNotepadGuiArgs(args);
+      const value = checkFileAllowed(validateNotepadGuiArgs(args));
       return Object.freeze({
         action: "notepad_gui",
         target: "The only visible, foreground-validated Notepad window",
         operation: value.action,
         ...(value.action === "click" ? { x: value.x, y: value.y } : {}),
+        ...(value.action === "open" ? { path: value.path } : {}),
         ...(value.action === "type" ? { preview: value.text.slice(0, 80), characters: value.text.length } : {}),
         ...(value.action === "scroll" ? { direction: value.direction, steps: value.steps } : {}),
         notice: "Input affects Notepad and requires local approval for every command."
@@ -111,7 +135,7 @@ export function createNotepadGuiTool({
     },
     async execute(args) {
       assertPlatform();
-      const action = validateNotepadGuiArgs(args);
+      const action = checkFileAllowed(validateNotepadGuiArgs(args));
       const systemRoot = env.SystemRoot ?? env.WINDIR;
       if (typeof systemRoot !== "string" || !path.win32.isAbsolute(systemRoot)) {
         throw new ReadOnlyToolError("Windows SystemRoot is unavailable.", "SYSTEM_ROOT_UNAVAILABLE");
