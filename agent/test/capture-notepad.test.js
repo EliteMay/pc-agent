@@ -97,7 +97,7 @@ test("capture rejects absent or relative Windows system root", async () => {
 test("capture normalizes subprocess failures without leaking stderr or secrets", async () => {
   const tool = createCaptureNotepadTool({
     platform: "win32",
-    env: { SystemRoot: "C:\\Windows" },
+    env: { SystemRoot: "C:\\Windows", TEMP: "C:\\Users\\tester\\AppData\\Local\\Temp" },
     runCapture: async () => { throw new Error("Sensitive application contents"); }
   });
   await assert.rejects(
