@@ -3184,21 +3184,33 @@ Run("Live WinForms research Yes button requires acknowledgement and its own clic
 
             var yesButton = Descendants(form).OfType<Button>()
                 .Single(button => button.Text == "内容を確認して許可");
+            Exception? callbackError = null;
             form.Shown += (_, _) => form.BeginInvoke(new Action(() =>
             {
-                Require(!yesButton.Enabled,
-                    "the unacknowledged native Yes button must be disabled");
-                yesButton.PerformClick();
-                Require(!form.ApprovedByExplicitClick,
-                    "clicking a disabled approval button cannot grant anything");
+                try
+                {
+                    Require(!yesButton.Enabled,
+                        "the unacknowledged native Yes button must be disabled");
+                    yesButton.PerformClick();
+                    Require(!form.ApprovedByExplicitClick,
+                        "clicking a disabled approval button cannot grant anything");
 
-                form.SetAcknowledgedForTest(true);
-                Require(yesButton.Enabled,
-                    "acknowledging exact preview is required before Yes");
-                yesButton.PerformClick();
+                    form.SetAcknowledgedForTest(true);
+                    Require(yesButton.Enabled,
+                        "acknowledging exact preview is required before Yes");
+                    yesButton.PerformClick();
+                }
+                catch (Exception ex)
+                {
+                    // No unhandled UI exception or indefinitely open modal in CI.
+                    callbackError = ex;
+                    form.DialogResult = DialogResult.No;
+                    form.Close();
+                }
             }));
 
             var result = form.ShowDialog();
+            if (callbackError is not null) throw callbackError;
             Equal(DialogResult.Yes, result, "checked test callback returns Yes");
             Require(form.ApprovedByExplicitClick,
                 "the affirmative result must originate in the checked Yes click callback");
