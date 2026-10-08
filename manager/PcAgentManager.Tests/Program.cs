@@ -1072,6 +1072,103 @@ Run("NT relative-handle move refuses same-byte source replacement after approval
     }
 });
 
+
+Run("NT relative-handle move blocks relocation of an intermediate destination ancestor", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNtAnchorTests", Guid.NewGuid().ToString("N"));
+    var intermediate = Path.Combine(root, "group");
+    var parent = Path.Combine(intermediate, "incoming");
+    var displaced = Path.Combine(root, "group-displaced");
+    Directory.CreateDirectory(parent);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(parent, "target.txt");
+        File.WriteAllText(source, "must stay inside");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "nt-ancestor-lock-1");
+
+        var relocationDenied = false;
+        WindowsNoReplaceMovePrototype.MoveFileForTest(
+            source,
+            destination,
+            beforeNativeRename: () =>
+            {
+                try
+                {
+                    Directory.Move(intermediate, displaced);
+                }
+                catch (IOException)
+                {
+                    relocationDenied = true;
+                }
+            },
+            approved: approved,
+            operationId: "nt-ancestor-lock-1",
+            useNativeRelativeMoveForTest: true);
+
+        Require(relocationDenied, "intermediate ancestor cannot be renamed while guard is open");
+        Equal("must stay inside", File.ReadAllText(destination), "result remains inside approved root");
+        Require(!Directory.Exists(displaced), "ancestor did not move");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("NT relative-handle move blocks relocation of an intermediate source ancestor", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNtAnchorTests", Guid.NewGuid().ToString("N"));
+    var intermediate = Path.Combine(root, "workspace");
+    var parent = Path.Combine(intermediate, "src");
+    var displaced = Path.Combine(root, "workspace-displaced");
+    Directory.CreateDirectory(parent);
+
+    try
+    {
+        var source = Path.Combine(parent, "source.txt");
+        var destination = Path.Combine(root, "target.txt");
+        File.WriteAllText(source, "approved source content");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "nt-ancestor-lock-2");
+
+        var relocationDenied = false;
+        WindowsNoReplaceMovePrototype.MoveFileForTest(
+            source,
+            destination,
+            beforeNativeRename: () =>
+            {
+                try
+                {
+                    Directory.Move(intermediate, displaced);
+                }
+                catch (IOException)
+                {
+                    relocationDenied = true;
+                }
+            },
+            approved: approved,
+            operationId: "nt-ancestor-lock-2",
+            useNativeRelativeMoveForTest: true);
+
+        Require(relocationDenied, "intermediate source ancestor cannot be renamed");
+        Equal("approved source content", File.ReadAllText(destination), "move result is correct");
+        Require(!Directory.Exists(displaced), "source ancestor remains anchored");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
