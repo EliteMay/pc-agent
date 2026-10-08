@@ -2,7 +2,7 @@ import net from "node:net";
 import { timingSafeEqual } from "node:crypto";
 
 const MAX_REQUEST_BYTES = 16 * 1024;
-const PRIVILEGED_METHODS = new Set(["respond_approval", "prepare_shutdown"]);
+const PRIVILEGED_METHODS = new Set(["get_pending_approval", "respond_approval", "prepare_shutdown"]);
 const ALLOWED_METHODS = new Set([
   "hello",
   "get_status",
