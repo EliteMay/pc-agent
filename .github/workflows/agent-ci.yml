@@ -28,3 +28,11 @@ jobs:
       - name: Test
         working-directory: agent
         run: npm test
+      - name: Parse fixed screen capture PowerShell helper
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'agent/src/tools/capture-notepad.ps1').Path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw (($errors | ForEach-Object { $_.ToString() }) -join "`n") }
+
