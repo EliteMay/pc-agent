@@ -3,6 +3,7 @@ export const Capabilities = Object.freeze({
   FILE_WRITE: "file.write",
   FILE_DELETE: "file.delete",
   PROCESS_INSPECT: "process.inspect",
+  SCREEN_CAPTURE: "screen.capture",
   PROCESS_START: "process.start",
   PROCESS_STOP: "process.stop",
   COMMAND_DEVELOPMENT: "command.development",

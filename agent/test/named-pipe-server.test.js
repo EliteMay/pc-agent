@@ -54,9 +54,11 @@ test("named pipe exposes pending approval and accepts local decision", {
   };
 
   const decisions = [];
+  const approvalSecret = "a".repeat(64);
 
   const server = createNamedPipeServer({
     pipeName,
+    approvalSecret,
     getHealth: () => ({
       version: "0.4.0",
       protocol_version: 1
@@ -80,9 +82,25 @@ test("named pipe exposes pending approval and accepts local decision", {
   await server.listen();
 
   try {
-    const pending = await request(
+    const unauthenticated = await request(
       pipeName,
       "get_pending_approval"
+    );
+    assert.equal(unauthenticated.ok, false);
+    assert.equal(unauthenticated.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+
+    const spoofed = await request(
+      pipeName,
+      "respond_approval",
+      { operation_id: "op-1", decision: "approved" }
+    );
+    assert.equal(spoofed.ok, false);
+    assert.deepEqual(decisions, []);
+
+    const pending = await request(
+      pipeName,
+      "get_pending_approval",
+      { auth_token: approvalSecret }
     );
 
     assert.equal(pending.ok, true);
@@ -100,7 +118,8 @@ test("named pipe exposes pending approval and accepts local decision", {
       "respond_approval",
       {
         operation_id: "op-1",
-        decision: "approved"
+        decision: "approved",
+        auth_token: approvalSecret
       }
     );
 
@@ -119,7 +138,8 @@ test("named pipe exposes pending approval and accepts local decision", {
 
     const cleared = await request(
       pipeName,
-      "get_pending_approval"
+      "get_pending_approval",
+      { auth_token: approvalSecret }
     );
 
     assert.equal(cleared.ok, true);

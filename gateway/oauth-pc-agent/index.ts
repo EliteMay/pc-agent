@@ -23,12 +23,15 @@ const WRITE_TOOLS = new Set([
   "edit_text_file",
 ]);
 
+const SENSITIVE_READ_TOOLS = new Set(["capture_notepad"]);
+
 const DEVELOPMENT_TOOLS = new Set([
   "run_development_command",
 ]);
 
 const DEVICE_TOOLS = new Set([
   ...READ_ONLY_TOOLS,
+  ...SENSITIVE_READ_TOOLS,
   ...WRITE_TOOLS,
   ...DEVELOPMENT_TOOLS,
 ]);
@@ -134,6 +137,13 @@ const TOOLS = [
     description: "Return the current Windows process list from the paired PC Agent.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "capture_notepad",
+    title: "Capture a Notepad window with local consent",
+    description: "Capture only one visible Notepad window. Requires an explicit local Manager approval; the image is transmitted to ChatGPT and removed from the command result after retrieval.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "create_directory",
@@ -308,6 +318,46 @@ function mcpResult(id: unknown, payload: unknown, isError = false) {
   });
 }
 
+function mcpCaptureResult(id: unknown, payload: any) {
+  const image = payload?.result;
+  const metadata = {
+    success: true,
+    command_id: payload.commandId,
+    target: "notepad",
+    mime_type: "image/jpeg",
+    width: image?.width,
+    height: image?.height,
+    cloud_result_redacted: true,
+  };
+  if (
+    image?.target !== "notepad"
+    || image?.mime_type !== "image/jpeg"
+    || !Number.isInteger(image?.width) || image.width < 1 || image.width > 960
+    || !Number.isInteger(image?.height) || image.height < 1 || image.height > 720
+    || typeof image?.image_base64 !== "string"
+    || image.image_base64.length > 466668
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(image.image_base64)
+  ) {
+    return mcpResult(id, { success: false, errorCode: "invalid_capture_result" }, true);
+  }
+  return json({
+    jsonrpc: "2.0",
+    id: id ?? null,
+    result: {
+      content: [
+        { type: "image", data: image.image_base64, mimeType: "image/jpeg" },
+        { type: "text", text: JSON.stringify(metadata) },
+      ],
+      structuredContent: metadata,
+      isError: false,
+    },
+  });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function mcpError(id: unknown, code: number, message: string) {
   return json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 }
@@ -340,6 +390,10 @@ async function newestDevice(ctx: any) {
 }
 
 function validateToolArgs(name: string, args: any) {
+  if (name === "capture_notepad" && (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length !== 0)) {
+    throw new Error("capture_notepad accepts no arguments");
+  }
+
   if (name === "list_directory") {
     if (!args || typeof args.path !== "string" || !args.path.trim()) {
       throw new Error("path is required");
@@ -755,7 +809,7 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetada
 
   const isWriteTool = WRITE_TOOLS.has(toolName);
   const isDevelopmentTool = DEVELOPMENT_TOOLS.has(toolName);
-  const requiresLocalApproval = isWriteTool || isDevelopmentTool;
+  const requiresLocalApproval = isWriteTool || isDevelopmentTool || SENSITIVE_READ_TOOLS.has(toolName);
   const queuedStatus = "agent_queued";
   const claimedStatus = "agent_claimed";
 
@@ -774,7 +828,7 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetada
         local_approval_required: requiresLocalApproval
       },
       status: queuedStatus,
-      expires_at: new Date(Date.now() + (isDevelopmentTool ? 135000 : isWriteTool ? 60000 : 45000)).toISOString(),
+      expires_at: new Date(Date.now() + (isDevelopmentTool ? 135000 : requiresLocalApproval ? 60000 : 45000)).toISOString(),
     })
     .select("command_id")
     .single();
@@ -795,6 +849,20 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetada
     if (error) throw error;
 
     if (row?.status === "completed") {
+      if (toolName === "capture_notepad") {
+        // The queue is a temporary transport only; do not retain an image in
+        // the audit result after the gateway has retrieved it.
+        const { data: redacted, error: redactError } = await ctx.supabaseAdmin
+          .from("kaito_pc_commands")
+          .update({ result: { redacted: true, reason: "capture_delivered" } })
+          .eq("command_id", commandId)
+          .eq("status", "completed")
+          .select("command_id")
+          .maybeSingle();
+        if (redactError || !redacted) {
+          throw new Error("Capture was not redacted; image delivery refused.");
+        }
+      }
       return { success: true, result: row.result, commandId };
     }
 
@@ -965,7 +1033,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_begin_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -978,7 +1046,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_status_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -992,7 +1060,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_finish_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -1083,7 +1151,7 @@ const handler = async (req: Request, ctx: any) => {
           try {
             const gatewayError = {
               errorCode: "gateway_error",
-              message: error?.message ?? String(error),
+              message: errorMessage(error),
             };
             await finishTaskStep(ctx, {
               taskId: args?.task_id,
@@ -1099,7 +1167,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_step_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -1116,13 +1184,14 @@ const handler = async (req: Request, ctx: any) => {
 
     try {
       const outcome = await enqueueTool(ctx, name, args);
+      if (outcome.success && name === "capture_notepad") return mcpCaptureResult(body.id, outcome);
       if (outcome.success) return mcpResult(body.id, outcome.result, false);
       return mcpResult(body.id, outcome.error, true);
     } catch (error) {
       return mcpResult(body.id, {
         success: false,
         errorCode: "gateway_error",
-        message: error?.message ?? String(error),
+        message: errorMessage(error),
         retryable: true,
       }, true);
     }

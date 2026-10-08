@@ -132,6 +132,23 @@ async function readJson(req: Request) {
   }
 }
 
+// Remove unclaimed screenshot payloads from the queue on subsequent authenticated
+// device polls. Successfully delivered images are redacted immediately by OAuth.
+async function redactStaleCaptures() {
+  const cutoff = new Date(Date.now() - 2 * 60_000).toISOString();
+  const { error } = await supabase
+    .from("kaito_pc_commands")
+    .update({ result: { redacted: true, reason: "capture_expired" } })
+    .eq("tool_name", "capture_notepad")
+    .eq("status", "completed")
+    .lt("completed_at", cutoff)
+    .contains("result", { target: "notepad" });
+  if (error) {
+    // Fail closed: if retention cleanup is broken, refuse new device polling.
+    throw new Error("Unable to enforce screenshot retention policy.");
+  }
+}
+
 async function handlePoll(req: Request, device: any) {
   const body = await readJson(req);
   const waitMs = boundedWaitMs(body?.wait_ms);
@@ -141,6 +158,7 @@ async function handlePoll(req: Request, device: any) {
       : undefined;
 
   await touchDevice(device.device_id, agentVersion);
+  await redactStaleCaptures();
 
   const deadline = Date.now() + waitMs;
 

@@ -36,13 +36,14 @@ function createFixture(options = {}) {
   };
 }
 
-test("registers the seven bounded read-only tools", () => {
+test("registers the bounded read-only tools and locally approved capture", () => {
   const fixture = createFixture();
 
   try {
     assert.deepEqual(
       fixture.registry.list().map((tool) => tool.name).sort(),
       [
+        "capture_notepad",
         "find_paths",
         "list_directory",
         "list_processes",
@@ -53,6 +54,8 @@ test("registers the seven bounded read-only tools", () => {
       ]
     );
 
+    assert.equal(fixture.registry.require("capture_notepad").capability, "screen.capture");
+    assert.equal(fixture.registry.require("capture_notepad").confirmation, "required");
     assert.equal(
       fixture.registry.require("ping").capability,
       "system.inspect"
