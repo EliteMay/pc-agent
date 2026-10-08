@@ -5,6 +5,7 @@ import {
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { Capabilities } from "../security/capabilities.js";
+import { minimalWindowsChildEnvironment } from "../security/child-process-env.js";
 import {
   isSensitivePath,
   resolveExistingPathWithinAllowedRoots
@@ -477,6 +478,7 @@ function terminateProcessTree(pid) {
         {
           shell: false,
           windowsHide: true,
+          env: minimalWindowsChildEnvironment(),
           stdio: "ignore"
         }
       );
