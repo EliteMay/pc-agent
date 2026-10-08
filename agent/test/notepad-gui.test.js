@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   createNotepadGuiTool,
   parseNotepadGuiResult,
@@ -35,7 +38,10 @@ test("validateNotepadGuiArgs rejects unknown actions, fields, coordinates and te
     { action: "scroll", direction: "left", steps: 1 },
     { action: "scroll", direction: "up", steps: 0 },
     { action: "scroll", direction: "down", steps: 4 },
-    { action: "save", path: "C:\\secret.txt" }
+    { action: "save", path: "C:\\secret.txt" },
+    { action: "open", path: "notepad.txt" },
+    { action: "open", path: "C:\\Windows\\calc.exe" },
+    { action: "open", path: "C:\\secret.txt", extra: true }
   ];
   for (const args of bad) {
     assert.throws(() => validateNotepadGuiArgs(args),
@@ -139,5 +145,42 @@ test("notepad GUI result must match the requested action, never claim verificati
   ]) {
     assert.throws(() => parseNotepadGuiResult(invalid, "click"),
       (error) => error.code === "INVALID_GUI_RESULT");
+  }
+});
+
+test("open is only allowed for an existing small .txt file inside allowed roots", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pc-agent-notepad-open-"));
+  const filename = path.join(root, "test.txt");
+  const outside = path.join(tmpdir(), "other.txt");
+  writeFileSync(filename, "harmless test data");
+  try {
+    const invocations = [];
+    const tool = createNotepadGuiTool({
+      platform: "win32",
+      allowedRoots: [root],
+      env: { SystemRoot: "C:\\Windows", TEMP: root },
+      runCommand: async (_exe, _argv, options) => {
+        invocations.push(options.env.PC_AGENT_NOTEPAD_ACTION_B64);
+        return { stdout: JSON.stringify({
+          target: "notepad", action: "open", dispatched: true, verified: false
+        }), stderr: "" };
+      }
+    });
+    const summary = tool.approvalSummary({ action: "open", path: filename });
+    assert.equal(summary.operation, "open");
+    assert.equal(summary.path.toLowerCase(), filename.toLowerCase());
+    await tool.execute({ action: "open", path: filename });
+    assert.equal(invocations.length, 1);
+    const passed = JSON.parse(Buffer.from(invocations[0], "base64").toString("utf8"));
+    assert.equal(passed.path.toLowerCase(), filename.toLowerCase());
+    await assert.rejects(
+      tool.execute({ action: "open", path: outside }),
+      (error) => error.code === "PATH_NOT_FOUND" || error.code === "PATH_OUTSIDE_ALLOWED_ROOTS"
+    );
+    assert.equal(invocations.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
