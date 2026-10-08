@@ -57,9 +57,8 @@ try {
 
         if ($validAgentVersion -and (Test-Path -LiteralPath $exe -PathType Leaf)) {
             $managerVersion = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
-            Assert-Readiness ($managerVersion -eq $agentVersion -or
-                $managerVersion.StartsWith($agentVersion + '+', [StringComparison]::Ordinal))
-                'Manager and Agent release versions match'
+            $sameVersion = ($managerVersion -eq $agentVersion -or $managerVersion.StartsWith($agentVersion + '+', [StringComparison]::Ordinal))
+            Assert-Readiness $sameVersion 'Manager and Agent release versions match'
         }
     }
 
@@ -71,17 +70,59 @@ try {
         Assert-Readiness $match.Success 'Checksum manifest has a single Manager SHA-256 entry'
         if ($match.Success) {
             $actual = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
-            Assert-Readiness ([string]::Equals(
-                $actual, $match.Groups[1].Value,
-                [StringComparison]::OrdinalIgnoreCase)) 'Manager binary checksum matches'
+            $hashMatches = [string]::Equals($actual, $match.Groups[1].Value, [StringComparison]::OrdinalIgnoreCase)
+            Assert-Readiness $hashMatches 'Manager binary checksum matches'
         }
     }
 
     if (Test-Path -LiteralPath $node -PathType Leaf) {
         $nodeVersion = & $node --version
-        Assert-Readiness ($LASTEXITCODE -eq 0 -and
-            $nodeVersion -match '^v\d+\.\d+\.\d+$')
-            'Bundled Node runtime executes'
+        $nodeWorks = ($LASTEXITCODE -eq 0 -and $nodeVersion -match '^v\d+\.\d+\.\d+
+    }
+
+    if (Test-Path -LiteralPath $exe -PathType Leaf) {
+        $check = Start-Process -FilePath $exe -ArgumentList '--bundle-check' -Wait -PassThru
+        Assert-Readiness ($check.ExitCode -eq 0) 'Manager --bundle-check passed'
+    }
+
+    if ($RequireLoginStartup -or $RequireGameSafety) {
+        $configPath = Join-Path $env:LOCALAPPDATA 'PcAgent\manager.json'
+        $exists = Test-Path -LiteralPath $configPath -PathType Leaf
+        Assert-Readiness $exists 'Installed Manager config present'
+
+        if ($exists) {
+            $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            if ($RequireLoginStartup) {
+                Assert-Readiness ($config.auto_start_manager -eq $true)
+                    'Manager login auto-start setting enabled'
+                $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+                $registry = Get-ItemProperty -Path $runKey -Name 'PC Agent Manager' -ErrorAction SilentlyContinue
+                $expected = '"' + $exe + '" --background'
+                $entryMatches = ($null -ne $registry -and [string]::Equals([string]$registry.'PC Agent Manager', $expected, [StringComparison]::OrdinalIgnoreCase))
+                Assert-Readiness $entryMatches 'HKCU login entry points to this installed Manager'
+            }
+            if ($RequireGameSafety) {
+                Assert-Readiness ($config.pause_agent_during_protected_games -eq $true)
+                    'VALORANT Game Safety setting enabled'
+                Assert-Readiness ($config.auto_start_agent -eq $true)
+                    'Agent starts under Manager supervision'
+            }
+        }
+    }
+}
+catch {
+    # Deliberately report exception type rather than secrets from input,
+    # logs, or a configuration file's original error message.
+    $failures.Add('Unexpected verifier error: ' + $_.Exception.GetType().Name)
+    Write-Output ('FAIL verifier exception: ' + $_.Exception.GetType().Name)
+}
+
+Write-Output ("Release readiness: {0} checks passed, {1} failed." -f
+    $passed, $failures.Count)
+if ($failures.Count -ne 0) { exit 1 }
+exit 0
+)
+        Assert-Readiness $nodeWorks 'Bundled Node runtime executes'
     }
 
     if (Test-Path -LiteralPath $exe -PathType Leaf) {
