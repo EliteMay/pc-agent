@@ -2,6 +2,8 @@ import net from "node:net";
 import { timingSafeEqual } from "node:crypto";
 
 const MAX_REQUEST_BYTES = 16 * 1024;
+const MAX_PIPE_CONNECTIONS = 32;
+const IPC_IDLE_TIMEOUT_MS = 5000;
 const PRIVILEGED_METHODS = new Set(["get_pending_approval", "respond_approval", "prepare_shutdown"]);
 const ALLOWED_METHODS = new Set([
   "hello",
@@ -59,11 +61,22 @@ export function createNamedPipeServer({
   const server = net.createServer((socket) => {
     socket.setEncoding("utf8");
     let buffer = "";
+    let handled = false;
 
-    socket.on("data", async (chunk) => {
+    // Untrusted local clients must not hold handles forever or crash the
+    // Agent by resetting a connection while an IPC response is in flight.
+    socket.setTimeout(IPC_IDLE_TIMEOUT_MS, () => socket.destroy());
+    socket.on("error", () => socket.destroy());
+
+    socket.on("data", (chunk) => {
+      if (handled) {
+        return;
+      }
+
       buffer += chunk;
 
       if (Buffer.byteLength(buffer, "utf8") > MAX_REQUEST_BYTES) {
+        handled = true;
         socket.end(encodeResponse(null, false, {
           code: "REQUEST_TOO_LARGE",
           message: "IPC request exceeded the size limit."
@@ -76,8 +89,13 @@ export function createNamedPipeServer({
         return;
       }
 
+      // Exactly one newline-delimited request per connection.
+      // Discard pipelined requests rather than executing multiple callbacks
+      // from an already authorized connection.
+      handled = true;
       const line = buffer.slice(0, newline);
       buffer = "";
+      socket.pause();
 
       let request;
       try {
@@ -182,11 +200,18 @@ export function createNamedPipeServer({
     });
   });
 
+  server.maxConnections = MAX_PIPE_CONNECTIONS;
+
   return {
     async listen() {
       await new Promise((resolve, reject) => {
         server.once("error", reject);
-        server.listen(pipePath(pipeName), () => {
+        server.listen({
+          path: pipePath(pipeName),
+          readableAll: false,
+          writableAll: false,
+          exclusive: true
+        }, () => {
           server.off("error", reject);
           resolve();
         });
