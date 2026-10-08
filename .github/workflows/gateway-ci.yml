@@ -1,0 +1,29 @@
+name: Gateway CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+    paths:
+      - 'gateway/**'
+      - '.github/workflows/gateway-ci.yml'
+  pull_request:
+    paths:
+      - 'gateway/**'
+      - '.github/workflows/gateway-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check OAuth and device gateway
+        run: deno check gateway/oauth-pc-agent/index.ts gateway/pc-agent-device/index.ts
