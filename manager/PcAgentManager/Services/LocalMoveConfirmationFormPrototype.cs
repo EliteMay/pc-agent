@@ -21,12 +21,15 @@ internal sealed class LocalMoveConfirmationFormPrototype : Form
     private bool _expired;
 
     internal LocalMoveConfirmationFormPrototype(
-        LocalMoveDialogConsentPrototype.DialogChallenge displayed)
+        LocalMoveDialogConsentPrototype.DialogChallenge displayed,
+        bool previewOnly = false)
     {
         ArgumentNullException.ThrowIfNull(displayed);
         _expiresAt = displayed.ExpiresAt;
 
-        Text = "PC Agent - ファイル移動の確認（実験用）";
+        Text = previewOnly
+            ? "PC Agent - 確認画面プレビュー（ファイル操作なし）"
+            : "PC Agent - ファイル移動の確認（実験用）";
         Size = new Size(820, 680);
         MinimumSize = new Size(660, 540);
         StartPosition = FormStartPosition.CenterParent;
@@ -53,7 +56,9 @@ internal sealed class LocalMoveConfirmationFormPrototype : Form
         root.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "このファイル移動を許可する前に、対象を確認してください。",
+            Text = previewOnly
+                ? "これはプレビューです。確認してもファイルは移動されません。"
+                : "このファイル移動を許可する前に、対象を確認してください。",
             Font = new Font(Font.FontFamily, 12F, FontStyle.Bold),
             Margin = new Padding(0, 0, 0, 12)
         }, 0, 0);
@@ -114,7 +119,9 @@ internal sealed class LocalMoveConfirmationFormPrototype : Form
 
         _approve = new Button
         {
-            Text = "内容を確認して許可",
+            Text = previewOnly
+                ? "確認（プレビューのみ）"
+                : "内容を確認して許可",
             AutoSize = true,
             MinimumSize = new Size(180, 40),
             Enabled = false,
