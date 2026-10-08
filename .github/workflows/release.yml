@@ -83,6 +83,10 @@ jobs:
             ForEach-Object { "$($_.Hash.ToLower())  PcAgentManager.exe" } |
             Set-Content (Join-Path $bundle 'SHA256SUMS.txt')
 
+      - name: Verify release candidate packaging and SHA-256
+        shell: pwsh
+        run: ./scripts/Test-PcAgentRelease.ps1 -BundleRoot dist/pc-agent-manager-win-x64
+
       - name: Build release archive and checksum
         shell: pwsh
         run: |
