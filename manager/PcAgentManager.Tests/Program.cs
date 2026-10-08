@@ -1767,6 +1767,293 @@ Run("Manager sends per-launch secret for an authorized approval over Windows nam
     serverTask.GetAwaiter().GetResult();
 });
 
+
+Run("Isolated native move workflow executes only a confirmed and reserved operation", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveFlowTests", Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(root, "allowed");
+    var journal = Path.Combine(root, "replay");
+    Directory.CreateDirectory(allowed);
+
+    try
+    {
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(allowed, "destination.txt");
+        File.WriteAllText(source, "approved exact content");
+
+        using var signer = new LocalMoveApprovalTicketPrototype(
+            Enumerable.Repeat((byte)0x61, 32).ToArray(),
+            new DurableMoveApprovalReplayStorePrototype(journal));
+        var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+        var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+        var proposal = workflow.ProposeForTest(
+            "cmd-flow", "device-flow", "op-flow",
+            source, destination, allowed);
+
+        var refused = false;
+        try
+        {
+            _ = workflow.ConfirmForTest(proposal, false, now);
+        }
+        catch (InvalidOperationException)
+        {
+            refused = true;
+        }
+
+        Require(refused, "denied local confirmation must never mint a ticket");
+        Require(!File.Exists(destination), "a denied request changes nothing");
+        Equal(0, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "denial consumes no durable reservation");
+
+        var approved = workflow.ConfirmForTest(proposal, true, now);
+        workflow.ExecuteForTest(approved, now.AddSeconds(1));
+
+        Require(!File.Exists(source), "approved source moved");
+        Equal("approved exact content", File.ReadAllText(destination), "approved bytes survive");
+        Equal(1, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "approved operation was durably reserved before moving");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Isolated native move workflow rejects tampered ticket before any mutation", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveFlowTests", Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(root, "allowed");
+    var journal = Path.Combine(root, "replay");
+    Directory.CreateDirectory(allowed);
+
+    try
+    {
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(allowed, "destination.txt");
+        File.WriteAllText(source, "protected");
+
+        using var signer = new LocalMoveApprovalTicketPrototype(
+            Enumerable.Repeat((byte)0x62, 32).ToArray(),
+            new DurableMoveApprovalReplayStorePrototype(journal));
+        var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+        var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+        var proposal = workflow.ProposeForTest(
+            "cmd-tamper", "device-tamper", "op-tamper",
+            source, destination, allowed);
+        var original = workflow.ConfirmForTest(proposal, true, now);
+
+        var changedPayload = (byte[])original.Ticket.PayloadUtf8.Clone();
+        changedPayload[changedPayload.Length - 5] ^= 0x01;
+        var modified = original with
+        {
+            Ticket = new LocalMoveApprovalTicketPrototype.SignedTicket(
+                changedPayload, original.Ticket.HmacSha256)
+        };
+
+        var denied = false;
+        try
+        {
+            workflow.ExecuteForTest(modified, now.AddSeconds(1));
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+
+        Require(denied, "tampered signature must fail");
+        Equal("protected", File.ReadAllText(source), "source remains unchanged");
+        Require(!File.Exists(destination), "no mutation occurred");
+        Equal(0, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "invalid HMAC must not reserve an operation");
+
+        workflow.ExecuteForTest(original, now.AddSeconds(2));
+        Equal("protected", File.ReadAllText(destination),
+            "legitimate unaltered ticket still works");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Isolated native move workflow never retries failed rename after replay reservation", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveFlowTests", Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(root, "allowed");
+    var journal = Path.Combine(root, "replay");
+    Directory.CreateDirectory(allowed);
+
+    try
+    {
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(allowed, "destination.txt");
+        File.WriteAllText(source, "protected source");
+        File.WriteAllText(destination, "competing target");
+
+        var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+        var key = Enumerable.Repeat((byte)0x63, 32).ToArray();
+
+        using (var signer = new LocalMoveApprovalTicketPrototype(
+            key, new DurableMoveApprovalReplayStorePrototype(journal)))
+        {
+            var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+            var proposal = workflow.ProposeForTest(
+                "cmd-failure", "device-failure", "op-failure",
+                source, destination, allowed);
+            var confirmed = workflow.ConfirmForTest(proposal, true, now);
+
+            var failed = false;
+            try
+            {
+                workflow.ExecuteForTest(confirmed, now.AddSeconds(1));
+            }
+            catch (System.ComponentModel.Win32Exception error)
+            {
+                failed = error.NativeErrorCode is 80 or 183;
+                if (!failed) throw;
+            }
+            Require(failed, "native no-replace must reject existing destination");
+            Equal("protected source", File.ReadAllText(source),
+                "existing destination failure preserves source");
+            Equal("competing target", File.ReadAllText(destination),
+                "existing destination is never overwritten");
+        }
+
+        // A newly started Manager instance and newly signed ticket for
+        // the SAME operation must not trigger a retry.
+        using (var restartedSigner = new LocalMoveApprovalTicketPrototype(
+            key, new DurableMoveApprovalReplayStorePrototype(journal)))
+        {
+            var restarted = new LocalApprovedNativeMoveWorkflowPrototype(restartedSigner);
+            var repeatedProposal = restarted.ProposeForTest(
+                "cmd-failure", "device-failure", "op-failure",
+                source, destination, allowed);
+            var repeatedTicket = restarted.ConfirmForTest(
+                repeatedProposal, true, now.AddSeconds(3));
+            var replayDenied = false;
+            try
+            {
+                restarted.ExecuteForTest(repeatedTicket, now.AddSeconds(4));
+            }
+            catch (InvalidOperationException)
+            {
+                replayDenied = true;
+            }
+            Require(replayDenied, "reserved uncertain outcome cannot be repeated after restart");
+        }
+
+        Equal(1, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "no additional use marker was created");
+        Equal("competing target", File.ReadAllText(destination),
+            "competitor remains intact across denied retry");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Isolated native move workflow rejects source change after local confirmation", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveFlowTests", Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(root, "allowed");
+    var journal = Path.Combine(root, "replay");
+    Directory.CreateDirectory(allowed);
+
+    try
+    {
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(allowed, "destination.txt");
+        File.WriteAllText(source, "approved bytes");
+
+        using var signer = new LocalMoveApprovalTicketPrototype(
+            Enumerable.Repeat((byte)0x64, 32).ToArray(),
+            new DurableMoveApprovalReplayStorePrototype(journal));
+        var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+        var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+        var proposal = workflow.ProposeForTest(
+            "cmd-change", "device-change", "op-change",
+            source, destination, allowed);
+        var confirmed = workflow.ConfirmForTest(proposal, true, now);
+
+        File.WriteAllText(source, "modified bytes");
+
+        var denied = false;
+        try
+        {
+            workflow.ExecuteForTest(confirmed, now.AddSeconds(1));
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+
+        Require(denied, "source content changed after approval must be rejected");
+        Equal("modified bytes", File.ReadAllText(source), "no unexpected source mutation");
+        Require(!File.Exists(destination), "unapproved content was not moved");
+        Equal(1, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "a consumed approval is never reused even when native validation rejects it");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Isolated native move workflow rejects expired authorization without reservation", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveFlowTests", Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(root, "allowed");
+    var journal = Path.Combine(root, "replay");
+    Directory.CreateDirectory(allowed);
+
+    try
+    {
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(allowed, "destination.txt");
+        File.WriteAllText(source, "do not move");
+
+        using var signer = new LocalMoveApprovalTicketPrototype(
+            Enumerable.Repeat((byte)0x65, 32).ToArray(),
+            new DurableMoveApprovalReplayStorePrototype(journal));
+        var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+        var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+        var proposal = workflow.ProposeForTest(
+            "cmd-expired", "device-expired", "op-expired",
+            source, destination, allowed);
+        var confirmed = workflow.ConfirmForTest(proposal, true, now);
+
+        var expired = false;
+        try
+        {
+            workflow.ExecuteForTest(confirmed, now.AddMinutes(3));
+        }
+        catch (InvalidOperationException)
+        {
+            expired = true;
+        }
+        Require(expired, "expired ticket must fail before a filesystem operation");
+        Equal(0, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "expired ticket did not reserve the operation");
+        Equal("do not move", File.ReadAllText(source), "source remains");
+        Require(!File.Exists(destination), "destination never created");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
