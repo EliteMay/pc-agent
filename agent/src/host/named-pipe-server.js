@@ -151,8 +151,9 @@ export function createNamedPipeServer({
 
             const operationId = String(request?.params?.operation_id ?? "");
             const decision = String(request?.params?.decision ?? "");
+            const approvalNonce = String(request?.params?.approval_nonce ?? "");
 
-            result = onApprovalResponse(operationId, decision);
+            result = onApprovalResponse(operationId, decision, approvalNonce);
             break;
           }
           case "prepare_shutdown":
