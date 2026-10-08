@@ -86,6 +86,18 @@ export function createCaptureNotepadTool({
         throw new ReadOnlyToolError("Windows SystemRoot is unavailable.", "SYSTEM_ROOT_UNAVAILABLE");
       }
 
+      // Windows PowerShell's Add-Type compiler may use TMP ahead of TEMP.
+      // Never fall back to C:\\Windows\\Temp, which can be unwritable.
+      const userTemp = [env.TEMP, env.TMP, env.LOCALAPPDATA &&
+        path.win32.join(env.LOCALAPPDATA, "Temp")]
+        .find((entry) => typeof entry === "string" && path.win32.isAbsolute(entry));
+      if (!userTemp) {
+        throw new ReadOnlyToolError(
+          "A user-writable Windows temporary directory is unavailable.",
+          "TEMP_DIRECTORY_UNAVAILABLE"
+        );
+      }
+
       const executable = path.win32.join(
         systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
       );
@@ -106,8 +118,8 @@ export function createCaptureNotepadTool({
             env: {
               SystemRoot: systemRoot,
               WINDIR: systemRoot,
-              TEMP: env.TEMP ?? path.win32.join(systemRoot, "Temp"),
-              TMP: env.TMP ?? path.win32.join(systemRoot, "Temp"),
+              TEMP: userTemp,
+              TMP: userTemp,
               PATH: path.win32.join(systemRoot, "System32")
             }
           }
