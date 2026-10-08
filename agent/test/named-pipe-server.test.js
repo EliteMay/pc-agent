@@ -86,9 +86,17 @@ test("named pipe exposes pending approval and accepts local decision", {
   await server.listen();
 
   try {
-    const pending = await request(
+    const blockedPending = await request(
       pipeName,
       "get_pending_approval"
+    );
+    assert.equal(blockedPending.ok, false);
+    assert.equal(blockedPending.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+
+    const pending = await request(
+      pipeName,
+      "get_pending_approval",
+      { auth_token: approvalSecret }
     );
 
     assert.equal(pending.ok, true);
@@ -152,7 +160,8 @@ test("named pipe exposes pending approval and accepts local decision", {
 
     const cleared = await request(
       pipeName,
-      "get_pending_approval"
+      "get_pending_approval",
+      { auth_token: approvalSecret }
     );
 
     assert.equal(cleared.ok, true);
