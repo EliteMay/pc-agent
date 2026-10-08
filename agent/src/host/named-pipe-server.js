@@ -1,6 +1,10 @@
 import net from "node:net";
+import { timingSafeEqual } from "node:crypto";
 
 const MAX_REQUEST_BYTES = 16 * 1024;
+const MAX_PIPE_CONNECTIONS = 32;
+const IPC_IDLE_TIMEOUT_MS = 5000;
+const PRIVILEGED_METHODS = new Set(["get_pending_approval", "respond_approval", "prepare_shutdown"]);
 const ALLOWED_METHODS = new Set([
   "hello",
   "get_status",
@@ -33,7 +37,8 @@ export function createNamedPipeServer({
   getHealth,
   getPendingApproval,
   onApprovalResponse,
-  onPrepareShutdown
+  onPrepareShutdown,
+  approvalSecret
 }) {
   if (typeof getHealth !== "function") {
     throw new TypeError("getHealth must be a function.");
@@ -47,14 +52,31 @@ export function createNamedPipeServer({
     throw new TypeError("onApprovalResponse must be a function when provided.");
   }
 
+  // Missing authentication fails closed for privileged local IPC actions.
+  const expectedSecret = typeof approvalSecret === "string"
+    && /^[a-f0-9]{64}$/i.test(approvalSecret)
+    ? Buffer.from(approvalSecret, "hex")
+    : null;
+
   const server = net.createServer((socket) => {
     socket.setEncoding("utf8");
     let buffer = "";
+    let handled = false;
 
-    socket.on("data", async (chunk) => {
+    // Untrusted local clients must not hold handles forever or crash the
+    // Agent by resetting a connection while an IPC response is in flight.
+    socket.setTimeout(IPC_IDLE_TIMEOUT_MS, () => socket.destroy());
+    socket.on("error", () => socket.destroy());
+
+    socket.on("data", (chunk) => {
+      if (handled) {
+        return;
+      }
+
       buffer += chunk;
 
       if (Buffer.byteLength(buffer, "utf8") > MAX_REQUEST_BYTES) {
+        handled = true;
         socket.end(encodeResponse(null, false, {
           code: "REQUEST_TOO_LARGE",
           message: "IPC request exceeded the size limit."
@@ -67,8 +89,13 @@ export function createNamedPipeServer({
         return;
       }
 
+      // Exactly one newline-delimited request per connection.
+      // Discard pipelined requests rather than executing multiple callbacks
+      // from an already authorized connection.
+      handled = true;
       const line = buffer.slice(0, newline);
       buffer = "";
+      socket.pause();
 
       let request;
       try {
@@ -92,6 +119,23 @@ export function createNamedPipeServer({
       }
 
       try {
+        if (PRIVILEGED_METHODS.has(method)) {
+          const provided = request?.params?.auth_token;
+          const supplied = typeof provided === "string"
+            && /^[a-f0-9]{64}$/i.test(provided)
+            ? Buffer.from(provided, "hex")
+            : null;
+
+          if (!expectedSecret || !supplied
+              || !timingSafeEqual(expectedSecret, supplied)) {
+            socket.end(encodeResponse(request?.id, false, {
+              code: "LOCAL_IPC_AUTH_REQUIRED",
+              message: "Local authenticated Manager IPC is required."
+            }));
+            return;
+          }
+        }
+
         let result;
 
         switch (method) {
@@ -125,8 +169,9 @@ export function createNamedPipeServer({
 
             const operationId = String(request?.params?.operation_id ?? "");
             const decision = String(request?.params?.decision ?? "");
+            const approvalNonce = String(request?.params?.approval_nonce ?? "");
 
-            result = onApprovalResponse(operationId, decision);
+            result = onApprovalResponse(operationId, decision, approvalNonce);
             break;
           }
           case "prepare_shutdown":
@@ -155,11 +200,18 @@ export function createNamedPipeServer({
     });
   });
 
+  server.maxConnections = MAX_PIPE_CONNECTIONS;
+
   return {
     async listen() {
       await new Promise((resolve, reject) => {
         server.once("error", reject);
-        server.listen(pipePath(pipeName), () => {
+        server.listen({
+          path: pipePath(pipeName),
+          readableAll: false,
+          writableAll: false,
+          exclusive: true
+        }, () => {
           server.off("error", reject);
           resolve();
         });
