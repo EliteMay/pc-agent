@@ -71,6 +71,8 @@ test("capture uses only the fixed Windows PowerShell executable without a shell"
   assert.equal(options.windowsHide, true);
   assert.equal(options.timeout, 20000);
   assert.equal(options.env.PC_AGENT_DEVICE_TOKEN, undefined);
+  assert.equal(options.env.TEMP, "C:\\Temp");
+  assert.equal(options.env.TMP, "C:\\Temp");
   assert.ok(!args.includes("-Command"));
   assert.ok(!args.includes("-File"));
   const script = Buffer.from(args[args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
@@ -130,4 +132,34 @@ test("capture rejects corrupt metadata, oversized images and invalid base64", ()
       value.slice(0, 50)
     );
   }
+});
+
+test("Windows PowerShell TMP must match the selected user TEMP even when TMP is missing", async () => {
+  let passedEnv;
+  const tool = createCaptureNotepadTool({
+    platform: "win32",
+    env: {
+      SystemRoot: "C:\\Windows",
+      TEMP: "C:\\Users\\tester\\AppData\\Local\\Temp"
+    },
+    runCapture: async (_exe, _args, options) => {
+      passedEnv = options.env;
+      return { stdout: reply(), stderr: "" };
+    }
+  });
+  await tool.execute({});
+  assert.equal(passedEnv.TEMP, "C:\\Users\\tester\\AppData\\Local\\Temp");
+  assert.equal(passedEnv.TMP, passedEnv.TEMP);
+});
+
+test("Windows capture fails closed without a usable absolute temporary directory", async () => {
+  const tool = createCaptureNotepadTool({
+    platform: "win32",
+    env: { SystemRoot: "C:\\Windows", TEMP: "relative\\temp" },
+    runCapture: async () => { throw new Error("should not run"); }
+  });
+  await assert.rejects(
+    tool.execute({}),
+    (error) => error?.code === "TEMP_DIRECTORY_UNAVAILABLE"
+  );
 });
