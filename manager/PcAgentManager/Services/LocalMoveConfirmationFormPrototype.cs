@@ -15,11 +15,16 @@ internal sealed class LocalMoveConfirmationFormPrototype : Form
 {
     private readonly CheckBox _acknowledged;
     private readonly Button _approve;
+    private readonly System.Windows.Forms.Timer _expirationTimer = new() { Interval = 200 };
+    private readonly DateTimeOffset _expiresAt;
+    private bool _explicitApprovalClick;
+    private bool _expired;
 
     internal LocalMoveConfirmationFormPrototype(
         LocalMoveDialogConsentPrototype.DialogChallenge displayed)
     {
         ArgumentNullException.ThrowIfNull(displayed);
+        _expiresAt = displayed.ExpiresAt;
 
         Text = "PC Agent - ファイル移動の確認（実験用）";
         Size = new Size(820, 680);
@@ -113,7 +118,8 @@ internal sealed class LocalMoveConfirmationFormPrototype : Form
             AutoSize = true,
             MinimumSize = new Size(180, 40),
             Enabled = false,
-            DialogResult = DialogResult.Yes,
+            // Do not let WinForms grant Yes just by setting a DialogResult.
+            // Only the checked, non-expired Click callback below may do it.
             BackColor = Color.FromArgb(35, 85, 60),
             ForeColor = Color.White
         };
@@ -127,7 +133,41 @@ internal sealed class LocalMoveConfirmationFormPrototype : Form
             ForeColor = Color.White
         };
         _acknowledged.CheckedChanged += (_, _) =>
-            _approve.Enabled = _acknowledged.Checked;
+            _approve.Enabled = _acknowledged.Checked && !_expired
+                && DateTimeOffset.UtcNow < _expiresAt;
+
+        _approve.Click += (_, _) =>
+        {
+            if (!_acknowledged.Checked || _expired
+                || DateTimeOffset.UtcNow >= _expiresAt)
+            {
+                DenyAndClose();
+                return;
+            }
+
+            _explicitApprovalClick = true;
+            DialogResult = DialogResult.Yes;
+            Close();
+        };
+
+        _expirationTimer.Tick += (_, _) =>
+        {
+            if (DateTimeOffset.UtcNow < _expiresAt) return;
+            _expired = true;
+            _approve.Enabled = false;
+            DenyAndClose();
+        };
+        Shown += (_, _) =>
+        {
+            if (DateTimeOffset.UtcNow >= _expiresAt)
+            {
+                _expired = true;
+                DenyAndClose();
+                return;
+            }
+
+            _expirationTimer.Start();
+        };
 
         buttons.Controls.Add(_approve);
         buttons.Controls.Add(deny);
@@ -139,15 +179,41 @@ internal sealed class LocalMoveConfirmationFormPrototype : Form
         CancelButton = deny;
         FormClosing += (_, _) =>
         {
-            if (DialogResult != DialogResult.Yes)
+            _expirationTimer.Stop();
+            if (!_explicitApprovalClick || DialogResult != DialogResult.Yes
+                || DateTimeOffset.UtcNow >= _expiresAt)
             {
+                _explicitApprovalClick = false;
                 DialogResult = DialogResult.No;
             }
         };
     }
 
+    private void DenyAndClose()
+    {
+        _explicitApprovalClick = false;
+        DialogResult = DialogResult.No;
+        Close();
+    }
+
+    // This only confirms the form's explicit, unexpired click callback ran.
+    // It is NOT proof that a human caused the input on an untrusted desktop.
+    internal bool ApprovedByExplicitClick =>
+        _explicitApprovalClick && DialogResult == DialogResult.Yes
+        && DateTimeOffset.UtcNow < _expiresAt;
+
     // These inspection members allow non-interactive Windows form unit tests.
     // They do NOT mint approval tickets or execute a filesystem operation.
     internal bool IsApprovalEnabledForTest => _approve.Enabled;
     internal void SetAcknowledgedForTest(bool value) => _acknowledged.Checked = value;
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _expirationTimer.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
 }
