@@ -54,7 +54,7 @@ internal sealed class ManagerProtectedPipeHost : IAsyncDisposable
         {
             try
             {
-                await _server.WaitForConnectionAsync(_stopping.Token);
+                await _server.WaitForConnectionAsync(_stopping.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
             {
@@ -76,13 +76,14 @@ internal sealed class ManagerProtectedPipeHost : IAsyncDisposable
                     _stopping.Token);
                 limit.CancelAfter(IdleTimeout);
 
-                var command = await ReadOneCommandAsync(_server, limit.Token);
+                var command = await ReadOneCommandAsync(_server, limit.Token)
+                    .ConfigureAwait(false);
                 var answer = string.Equals(
                     command, "PING 1", StringComparison.Ordinal)
                     ? Pong : Denied;
 
-                await _server.WriteAsync(answer, limit.Token);
-                await _server.FlushAsync(limit.Token);
+                await _server.WriteAsync(answer, limit.Token).ConfigureAwait(false);
+                await _server.FlushAsync(limit.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
             {
@@ -126,7 +127,8 @@ internal sealed class ManagerProtectedPipeHost : IAsyncDisposable
 
         while (count <= MaxRequestBytes)
         {
-            var read = await stream.ReadAsync(one.AsMemory(), token);
+            var read = await stream.ReadAsync(one.AsMemory(), token)
+                .ConfigureAwait(false);
             if (read == 0)
             {
                 return null;
@@ -158,7 +160,7 @@ internal sealed class ManagerProtectedPipeHost : IAsyncDisposable
 
         try
         {
-            await _listener;
+            await _listener.ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
         catch (ObjectDisposedException) { }
