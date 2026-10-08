@@ -104,8 +104,14 @@ internal sealed class LocalMoveDialogConsentPrototype
         {
             using var dialog = new LocalMoveConfirmationFormPrototype(displayed);
             var result = dialog.ShowDialog(owner);
+            // A caller setting a form's DialogResult property is not consent.
+            // The form must have executed its checked, unexpired Yes callback.
+            // This is still not proof of a physical user's input.
+            var verified = result == DialogResult.Yes
+                && dialog.ApprovedByExplicitClick
+                ? DialogResult.Yes : DialogResult.No;
             return ResolveLocalDialogForTest(
-                displayed, result, DateTimeOffset.UtcNow);
+                displayed, verified, DateTimeOffset.UtcNow);
         }
         finally
         {
