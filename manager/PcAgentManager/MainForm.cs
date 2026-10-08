@@ -39,7 +39,7 @@ public sealed class MainForm : Form
     private bool _gameSafetyEnabled;
     private bool _desktopCommanderManaged;
     private bool _gameSafetyCheckInProgress;
-    private string? _approvalDialogOperationId;
+    private string? _approvalDialogInstanceKey;
 
     public MainForm(
         ManagerPaths paths,
@@ -302,8 +302,8 @@ public sealed class MainForm : Form
         }
 
         if (string.Equals(
-                _approvalDialogOperationId,
-                pending.OperationId,
+                _approvalDialogInstanceKey,
+                pending.OperationId + ":" + pending.ApprovalNonce,
                 StringComparison.Ordinal))
         {
             return;
@@ -314,7 +314,7 @@ public sealed class MainForm : Form
 
     private async Task ShowApprovalDialogAsync(PendingApprovalSnapshot pending)
     {
-        _approvalDialogOperationId = pending.OperationId;
+        _approvalDialogInstanceKey = pending.OperationId + ":" + pending.ApprovalNonce;
 
         try
         {
@@ -464,7 +464,7 @@ public sealed class MainForm : Form
         }
         finally
         {
-            _approvalDialogOperationId = null;
+            _approvalDialogInstanceKey = null;
         }
     }
 
@@ -669,7 +669,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (_approvalDialogOperationId is not null)
+        if (_approvalDialogInstanceKey is not null)
         {
             MessageBox.Show(
                 this,
