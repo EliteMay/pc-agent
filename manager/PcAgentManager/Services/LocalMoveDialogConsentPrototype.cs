@@ -30,6 +30,7 @@ internal sealed class LocalMoveDialogConsentPrototype
         string DestinationPath,
         string AllowedRootPath,
         string SourceSha256,
+        DateTimeOffset IssuedAt,
         DateTimeOffset ExpiresAt);
 
     internal LocalMoveDialogConsentPrototype(
@@ -71,6 +72,7 @@ internal sealed class LocalMoveDialogConsentPrototype
                 request.DestinationPath,
                 request.AllowedRootPath,
                 request.SourceSha256,
+                now,
                 now + MaxDialogLifetime);
 
             _pending = new Pending(challenge, proposal);
@@ -109,7 +111,8 @@ internal sealed class LocalMoveDialogConsentPrototype
 
             _pending = null;
 
-            if (now > current.Displayed.ExpiresAt)
+            if (now < current.Displayed.IssuedAt
+                || now > current.Displayed.ExpiresAt)
             {
                 throw new InvalidOperationException(
                     "Local confirmation has expired.");
