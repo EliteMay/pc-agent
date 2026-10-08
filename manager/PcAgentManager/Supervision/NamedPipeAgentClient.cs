@@ -35,9 +35,10 @@ public sealed class NamedPipeAgentClient
     public async Task<PendingApprovalSnapshot?> GetPendingApprovalAsync(
         CancellationToken cancellationToken = default)
     {
+        RequireLocalAuthentication();
         var result = await SendAsync(
             "get_pending_approval",
-            parameters: null,
+            new { auth_token = _localApprovalSecret },
             cancellationToken);
 
         if (result.ValueKind == JsonValueKind.Null)
