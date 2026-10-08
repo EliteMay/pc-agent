@@ -20,7 +20,7 @@ const windowsOnly = {
 };
 
 function withFixture(run) {
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pc-agent-path-ops-")));
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), "pc-agent-path-ops-")));
   return Promise.resolve()
     .then(() => run(root))
     .finally(() => rmSync(root, { recursive: true, force: true }));
