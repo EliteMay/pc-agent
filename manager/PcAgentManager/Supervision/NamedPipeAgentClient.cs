@@ -7,6 +7,8 @@ namespace PcAgentManager.Supervision;
 
 public sealed class NamedPipeAgentClient
 {
+    private const int MaxResponseCharacters = 16 * 1024;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -105,6 +107,44 @@ public sealed class NamedPipeAgentClient
         }
     }
 
+    private static async Task<string> ReadBoundedResponseAsync(
+        StreamReader reader,
+        CancellationToken cancellationToken)
+    {
+        // ReadLineAsync alone buffers an unbounded line from an unexpected
+        // local pipe server. Limit the reply before JSON parsing.
+        var characters = new char[1024];
+        var response = new StringBuilder();
+
+        while (true)
+        {
+            var read = await reader.ReadAsync(
+                characters.AsMemory(), cancellationToken);
+
+            if (read == 0)
+            {
+                throw new InvalidDataException(
+                    "Agent IPC ended without a complete reply frame.");
+            }
+
+            for (var index = 0; index < read; index++)
+            {
+                if (characters[index] == '\n')
+                {
+                    return response.ToString().TrimEnd('\r');
+                }
+
+                response.Append(characters[index]);
+
+                if (response.Length > MaxResponseCharacters)
+                {
+                    throw new InvalidDataException(
+                        "Agent IPC response exceeded the maximum allowed length.");
+                }
+            }
+        }
+    }
+
     private async Task<JsonElement> SendAsync(
         string method,
         object? parameters,
@@ -147,7 +187,7 @@ public sealed class NamedPipeAgentClient
             @params = parameters
         }));
 
-        var line = await reader.ReadLineAsync(timeout.Token);
+        var line = await ReadBoundedResponseAsync(reader, timeout.Token);
         if (string.IsNullOrWhiteSpace(line))
         {
             throw new InvalidDataException("Agent IPC returned an empty response.");
@@ -155,6 +195,17 @@ public sealed class NamedPipeAgentClient
 
         using var document = JsonDocument.Parse(line);
         var root = document.RootElement;
+
+        // A reply from a different outstanding request or an impersonating
+        // pipe server is never proof that our requested action completed.
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("id", out var returnedId)
+            || returnedId.ValueKind != JsonValueKind.String
+            || !string.Equals(returnedId.GetString(), id, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Agent IPC response ID does not match its request.");
+        }
 
         if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
         {
