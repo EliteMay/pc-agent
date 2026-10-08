@@ -47,3 +47,19 @@ Desktop Commanderは本番経路に含めない。Supabase側のローカル承�
 - Supabase側と家PCには今回変更なし
 - Chrome向けインストール / 接続テスト未実施
 - Issue #29の4つの完成条件は未達
+
+
+## 2026-10-09 実証結果：ChatGPT Sites固定診断
+
+- [x] ユーザーが ChatGPT Work で [Private Site](https://kaito-pc-agent-web-bridge.kaito2526.chatgpt.site/) を作成し、Chrome版の本人用Pluginから `gateway_probe` の呼び出しに成功。
+- [x] **この通常のChatGPTチャットからも**実際の `mcp__Kaito_PC_Agent_Web_Bridge__gateway_probe` を実行し、次の固定値を確認した（正常な固定診断に過ぎない）：
+  ```json
+  {"success":true,"bridge":"Kaito PC Agent Web Bridge","version":"0.1.0","mode":"fixed-diagnostic","transport":"chatgpt-sites-mcp","pc_connected":false,"supabase_connected":false,"approvals_bypassed":false}
+  ```
+- [x] Plugin Creatorの作成ガイド・Sites MCP資料で、Siteの認証・ツール実装は **Sites専用の利用可能なskillを使う**必要があり、欠如時は別ホストでの代替や接続済み宣言をしないことを確認。
+- [ ] Site専用 `sites-mcp` スキルおよびSiteの下流Plugin許可リスト（`allowed`）は**このセッションに公開されていない**。`allowed` の検証なしに別のPluginをSiteへ接続したり、直接SupabaseへOAuthなしでプロキシしたりしない。
+- [ ] 既存のSupabase OAuth Gatewayとの実際の接続・認証・`ping`は未確認。個別のOAuth同意操作や毎回のWindows Manager承認を引き続き必須とする。
+- [ ] ユーザーがSiteのWork作業中に保存した `chrome-plugin-verification.md` はこの時点でGitHub `EliteMay/pc-agent/main` 上に**存在を確認できなかった**。本セクションをGitHub側の検証要約として追記した。Site内部ファイルが紐づいている可能性は残る。
+- [ ] Issue #29本来の4項目の完成条件は未達、家PCにはまだ接続していない。**診断成功と実操作成功を混同しないこと。**
+
+**次の進め方：** SitesのWorkセッションに戻り、同セッションの `sites-mcp` / `SKILL.md` にある下流連携 `allowed` 判定を実際に確認する。対応するOAuthアプリ・下流プラグインが正式に `allowed` であることが確かめられる場合に限り、Siteからの正規OAuth認証を安全に試す。判定を証明できない場合はそこで止め、実装や認証情報の注入をしない。
