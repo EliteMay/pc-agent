@@ -17,7 +17,7 @@ export function registerSafeWriteTools(registry, options = {}) {
     );
   }
 
-  registry.register(createNotepadGuiTool());
+  registry.register(createNotepadGuiTool({ allowedRoots: [...allowedRoots] }));
   registry.register(createCreateDirectoryTool({
     allowedRoots: [...allowedRoots]
   }));
