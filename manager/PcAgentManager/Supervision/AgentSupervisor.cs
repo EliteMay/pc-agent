@@ -228,6 +228,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
     public async Task<bool> RespondApprovalAsync(
         string operationId,
         bool approved,
+        string approvalNonce,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -244,6 +245,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
         var response = await pipe.RespondApprovalAsync(
             operationId,
             approved ? "approved" : "denied",
+            approvalNonce,
             cancellationToken);
 
         if (!response.Accepted)
