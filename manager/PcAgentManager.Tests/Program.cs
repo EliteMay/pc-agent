@@ -870,6 +870,208 @@ Run("Windows approval snapshot cannot authorize a different operation ID", () =>
     }
 });
 
+
+Run("NT relative-handle file move succeeds with matching local approval", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNtAnchorTests", Guid.NewGuid().ToString("N"));
+    var parent = Path.Combine(root, "destination");
+    Directory.CreateDirectory(parent);
+
+    try
+    {
+        var source = Path.Combine(root, "from.txt");
+        var destination = Path.Combine(parent, "to.txt");
+        File.WriteAllText(source, "only approved data");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "nt-approved-1");
+        WindowsNoReplaceMovePrototype.MoveFileForTest(
+            source, destination,
+            approved: approved, operationId: "nt-approved-1",
+            useNativeRelativeMoveForTest: true);
+
+        Require(!File.Exists(source), "native relative-handle source must be moved");
+        Equal("only approved data", File.ReadAllText(destination), "native result bytes");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("NT relative-handle move refuses a preexisting target", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNtAnchorTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "from.txt");
+        var destination = Path.Combine(root, "to.txt");
+        File.WriteAllText(source, "authorized source");
+        File.WriteAllText(destination, "protected existing");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "nt-approved-2");
+
+        var refused = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source, destination,
+                approved: approved, operationId: "nt-approved-2",
+                useNativeRelativeMoveForTest: true);
+        }
+        catch (System.ComponentModel.Win32Exception error)
+        {
+            refused = error.NativeErrorCode is 80 or 183;
+            if (!refused) throw;
+        }
+
+        Require(refused, "native NT collision must report target exists");
+        Equal("authorized source", File.ReadAllText(source), "NT source preserved");
+        Equal("protected existing", File.ReadAllText(destination), "NT target preserved");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("NT relative-handle move refuses a competing target at the native boundary", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNtAnchorTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "from.txt");
+        var destination = Path.Combine(root, "to.txt");
+        File.WriteAllText(source, "authorized source");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "nt-approved-3");
+
+        var refused = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source, destination,
+                beforeNativeRename: () =>
+                    File.WriteAllText(destination, "racing target"),
+                approved: approved, operationId: "nt-approved-3",
+                useNativeRelativeMoveForTest: true);
+        }
+        catch (System.ComponentModel.Win32Exception error)
+        {
+            refused = error.NativeErrorCode is 80 or 183;
+            if (!refused) throw;
+        }
+
+        Require(refused, "native NT race must report target exists");
+        Equal("authorized source", File.ReadAllText(source), "NT source survives");
+        Equal("racing target", File.ReadAllText(destination), "competing NT target survives");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("NT relative-handle move blocks destination parent relocation while opened", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNtAnchorTests", Guid.NewGuid().ToString("N"));
+    var parent = Path.Combine(root, "incoming");
+    var relocated = Path.Combine(root, "relocated");
+    Directory.CreateDirectory(parent);
+
+    try
+    {
+        var source = Path.Combine(root, "from.txt");
+        var destination = Path.Combine(parent, "to.txt");
+        File.WriteAllText(source, "remain within root");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "nt-approved-4");
+
+        var relocationDenied = false;
+        WindowsNoReplaceMovePrototype.MoveFileForTest(
+            source, destination,
+            beforeNativeRename: () =>
+            {
+                try
+                {
+                    Directory.Move(parent, relocated);
+                }
+                catch (IOException)
+                {
+                    relocationDenied = true;
+                }
+            },
+            approved: approved, operationId: "nt-approved-4",
+            useNativeRelativeMoveForTest: true);
+
+        Require(relocationDenied, "opened parent handle must block relocation");
+        Equal("remain within root", File.ReadAllText(destination), "file remains inside root");
+        Require(!Directory.Exists(relocated), "parent could not be moved");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("NT relative-handle move refuses same-byte source replacement after approval", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNtAnchorTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "from.txt");
+        var original = Path.Combine(root, "original.txt");
+        var destination = Path.Combine(root, "to.txt");
+        File.WriteAllText(source, "identical");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "nt-approved-5");
+        File.Move(source, original);
+        File.WriteAllText(source, "identical");
+
+        var denied = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source, destination,
+                approved: approved, operationId: "nt-approved-5",
+                useNativeRelativeMoveForTest: true);
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+
+        Require(denied, "native helper must enforce object identity");
+        Require(!File.Exists(destination), "replacement must not move");
+        Equal("identical", File.ReadAllText(source), "substitute survives");
+        Equal("identical", File.ReadAllText(original), "approved object survives");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
