@@ -548,9 +548,9 @@ Run("Windows approval snapshot permits an unchanged authorized file move", () =>
         File.WriteAllText(source, "approved bytes");
 
         var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
-            source, destination, root);
+            source, destination, root, "op-test-approved-1");
         WindowsNoReplaceMovePrototype.MoveFileForTest(
-            source, destination, approved: approved);
+            source, destination, approved: approved, operationId: "op-test-approved-1");
 
         Require(!File.Exists(source), "approved source must be moved");
         Equal("approved bytes", File.ReadAllText(destination), "approved result bytes");
@@ -576,7 +576,7 @@ Run("Windows approval snapshot refuses a same-byte source replacement", () =>
         File.WriteAllText(source, "identical contents");
 
         var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
-            source, destination, root);
+            source, destination, root, "op-test-approved-1");
 
         File.Move(source, original);
         File.WriteAllText(source, "identical contents");
@@ -585,7 +585,7 @@ Run("Windows approval snapshot refuses a same-byte source replacement", () =>
         try
         {
             WindowsNoReplaceMovePrototype.MoveFileForTest(
-                source, destination, approved: approved);
+                source, destination, approved: approved, operationId: "op-test-approved-1");
         }
         catch (InvalidOperationException)
         {
@@ -619,7 +619,7 @@ Run("Windows approval snapshot refuses destination parent replacement", () =>
         File.WriteAllText(source, "do not move");
 
         var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
-            source, destination, root);
+            source, destination, root, "op-test-approved-1");
 
         Directory.Move(parent, movedParent);
         Directory.CreateDirectory(parent);
@@ -628,7 +628,7 @@ Run("Windows approval snapshot refuses destination parent replacement", () =>
         try
         {
             WindowsNoReplaceMovePrototype.MoveFileForTest(
-                source, destination, approved: approved);
+                source, destination, approved: approved, operationId: "op-test-approved-1");
         }
         catch (InvalidOperationException)
         {
@@ -661,7 +661,7 @@ Run("Windows approval snapshot detects destination-parent swap at precommit test
         File.WriteAllText(source, "protected source");
 
         var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
-            source, destination, root);
+            source, destination, root, "op-test-approved-1");
 
         var refused = false;
         var callbackInvoked = false;
@@ -676,7 +676,7 @@ Run("Windows approval snapshot detects destination-parent swap at precommit test
                     Directory.CreateDirectory(parent);
                     callbackInvoked = true;
                 },
-                approved: approved);
+                approved: approved, operationId: "op-test-approved-1");
         }
         catch (InvalidOperationException)
         {
@@ -712,7 +712,7 @@ Run("Windows approval snapshot refuses source outside its allowed root", () =>
         try
         {
             _ = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
-                source, destination, allowedRoot);
+                source, destination, allowedRoot, "op-test-approved-1");
         }
         catch (InvalidOperationException)
         {
@@ -753,7 +753,7 @@ Run("Windows approval snapshot refuses a destination junction swap outside the r
         File.WriteAllText(source, "keep this inside approved roots");
 
         var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
-            source, destination, allowed);
+            source, destination, allowed, "op-test-approved-1");
 
         var hookCompleted = false;
         var rejected = false;
@@ -788,7 +788,7 @@ Run("Windows approval snapshot refuses a destination junction swap outside the r
 
                     hookCompleted = true;
                 },
-                approved: approved);
+                approved: approved, operationId: "op-test-approved-1");
         }
         catch (InvalidOperationException)
         {
@@ -808,7 +808,7 @@ Run("Windows approval snapshot refuses a destination junction swap outside the r
         try
         {
             _ = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
-                source, destination, allowed);
+                source, destination, allowed, "op-test-approved-1");
         }
         catch (InvalidOperationException)
         {
@@ -826,6 +826,47 @@ Run("Windows approval snapshot refuses a destination junction swap outside the r
         }
 
         Directory.Delete(sandbox, recursive: true);
+    }
+});
+
+
+Run("Windows approval snapshot cannot authorize a different operation ID", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveApprovalTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "original.txt");
+        var destination = Path.Combine(root, "result.txt");
+        File.WriteAllText(source, "protected content");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "approved-operation-1");
+
+        var refused = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source,
+                destination,
+                approved: approved,
+                operationId: "different-operation-2");
+        }
+        catch (InvalidOperationException)
+        {
+            refused = true;
+        }
+
+        Require(refused, "another operation must not reuse an approval");
+        Equal("protected content", File.ReadAllText(source), "original survives");
+        Require(!File.Exists(destination), "unapproved destination remains absent");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
     }
 });
 
