@@ -21,6 +21,7 @@ internal static class WindowsNoReplaceMovePrototype
     private const uint FileReadAttributes = 0x00000080;
     private const uint FileTraverse = 0x00000020;
     private const uint ShareReadWriteDelete = 0x00000007;
+    private const uint ShareReadWrite = 0x00000003;
     private const uint OpenExisting = 3;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
     private const uint FileFlagBackupSemantics = 0x02000000;
@@ -51,12 +52,19 @@ internal static class WindowsNoReplaceMovePrototype
         string destination,
         Action? beforeNativeRename = null,
         MoveApprovalSnapshotForTest? approved = null,
-        string? operationId = null)
+        string? operationId = null,
+        bool useNativeRelativeMoveForTest = false)
     {
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
         {
             throw new PlatformNotSupportedException(
                 "This experiment is supported only on Windows x64.");
+        }
+
+        if (useNativeRelativeMoveForTest && approved is null)
+        {
+            throw new InvalidOperationException(
+                "Handle-relative research requires a local approval snapshot.");
         }
 
         var originalPath = Path.GetFullPath(source);
@@ -88,12 +96,30 @@ internal static class WindowsNoReplaceMovePrototype
         using var sourceHandle = OpenFile(
             originalPath,
             DeleteAccess | FileReadAttributes,
-            FileFlagOpenReparsePoint);
+            FileFlagOpenReparsePoint,
+            useNativeRelativeMoveForTest ? ShareReadWrite : ShareReadWriteDelete);
 
         using var parentHandle = OpenFile(
             destinationDirectory,
             FileReadAttributes | FileTraverse,
-            FileFlagBackupSemantics | FileFlagOpenReparsePoint);
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+            useNativeRelativeMoveForTest ? ShareReadWrite : ShareReadWriteDelete);
+
+        // Keeping these directories open without FILE_SHARE_DELETE prevents
+        // their names from being relocated while this experiment executes.
+        // It is not a complete ancestor-chain guard or release-ready policy.
+        using var sourceParentGuard = !useNativeRelativeMoveForTest
+            ? null
+            : OpenFile(
+                Path.GetDirectoryName(originalPath)!,
+                FileReadAttributes | FileTraverse,
+                FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+                ShareReadWrite);
+
+        if (sourceParentGuard is not null)
+        {
+            EnsurePlainDirectory(sourceParentGuard, "Source parent");
+        }
 
         var sourceAttributes = GetAttributes(sourceHandle);
         var parentAttributes = GetAttributes(parentHandle);
@@ -116,7 +142,8 @@ internal static class WindowsNoReplaceMovePrototype
             : OpenFile(
                 approved.AllowedRootPath,
                 FileReadAttributes | FileTraverse,
-                FileFlagBackupSemantics | FileFlagOpenReparsePoint);
+                FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+                useNativeRelativeMoveForTest ? ShareReadWrite : ShareReadWriteDelete);
 
         if (approved is not null)
         {
@@ -138,6 +165,16 @@ internal static class WindowsNoReplaceMovePrototype
             // Detect deterministic parent/source swaps across the test hook.
             // This remains a check-before-use, not a kernel-enforced path lock.
             ValidateApproval(approved, sourceHandle, parentHandle, rootHandle!);
+        }
+
+        if (useNativeRelativeMoveForTest)
+        {
+            // Research path: relative filename resolved against the opened
+            // destination directory by NT, rather than against a mutable
+            // absolute destination path in kernel32's Win32 wrapper.
+            WindowsNtAnchoredMovePrototype.RenameFileNoReplace(
+                sourceHandle, parentHandle, destinationName);
+            return;
         }
 
         // FileNameLength excludes the trailing UTF-16 NUL. The Win32
@@ -421,12 +458,13 @@ internal static class WindowsNoReplaceMovePrototype
     private static SafeFileHandle OpenFile(
         string fileName,
         uint access,
-        uint flags)
+        uint flags,
+        uint shareMode = ShareReadWriteDelete)
     {
         var handle = CreateFileW(
             fileName,
             access,
-            ShareReadWriteDelete,
+            shareMode,
             IntPtr.Zero,
             OpenExisting,
             flags,
