@@ -1755,13 +1755,17 @@ Run("Manager sends per-launch secret for an authorized approval over Windows nam
             "operation ID must be bound to local user confirmation");
         Equal("approved", parameters.GetProperty("decision").GetString(),
             "decision must match local approval");
+        Equal(new string('f', 32),
+            parameters.GetProperty("approval_nonce").GetString(),
+            "response must bind to the exact local dialog instance");
 
         await writer.WriteLineAsync(
             "{\"id\":\"reply\",\"ok\":true,\"result\":{\"accepted\":true}}");
     });
 
     var client = new NamedPipeAgentClient(pipeName, secret);
-    var result = client.RespondApprovalAsync("op-private", "approved")
+    var result = client.RespondApprovalAsync(
+        "op-private", "approved", new string('f', 32))
         .GetAwaiter().GetResult();
     Require(result.Accepted, "authenticated local approval reply must be accepted");
     serverTask.GetAwaiter().GetResult();
