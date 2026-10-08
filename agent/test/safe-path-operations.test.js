@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -19,7 +20,7 @@ const windowsOnly = {
 };
 
 function withFixture(run) {
-  const root = mkdtempSync(path.join(tmpdir(), "pc-agent-path-ops-"));
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pc-agent-path-ops-")));
   return Promise.resolve()
     .then(() => run(root))
     .finally(() => rmSync(root, { recursive: true, force: true }));
