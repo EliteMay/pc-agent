@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 
 namespace PcAgentManager.Services;
@@ -14,8 +15,11 @@ internal sealed class DurableMoveApprovalReplayStorePrototype
     private const int MaxOperationIdChars = 128;
     private const int MaxMarkerCount = 10_000;
     private readonly string _directory;
+    private readonly SecurityIdentifier? _requiredOwnerSid;
 
-    internal DurableMoveApprovalReplayStorePrototype(string directory)
+    internal DurableMoveApprovalReplayStorePrototype(
+        string directory,
+        bool requireOwnerOnlyDirectoryForTest = false)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -23,8 +27,22 @@ internal sealed class DurableMoveApprovalReplayStorePrototype
         }
 
         _directory = Path.GetFullPath(directory);
-        Directory.CreateDirectory(_directory);
-        EnsurePlainDirectory(_directory);
+
+        // The strict fixture deliberately REFUSES auto-creation. Native
+        // CreateDirectoryW must have supplied the owner-only DACL at birth.
+        if (requireOwnerOnlyDirectoryForTest)
+        {
+            _requiredOwnerSid = WindowsIdentity.GetCurrent().User
+                ?? throw new InvalidOperationException(
+                    "Windows SID unavailable for protected replay store.");
+
+            VerifyProtectedDirectory();
+        }
+        else
+        {
+            Directory.CreateDirectory(_directory);
+            EnsurePlainDirectory(_directory);
+        }
     }
 
     /// <summary>
@@ -41,6 +59,7 @@ internal sealed class DurableMoveApprovalReplayStorePrototype
         }
 
         EnsurePlainDirectory(_directory);
+        VerifyProtectedDirectory();
 
         // Hard limit: no eviction, and no automatic forgetting after restart.
         // The prototype fails closed instead of allowing unbounded disk writes.
@@ -77,6 +96,17 @@ internal sealed class DurableMoveApprovalReplayStorePrototype
         // NOTE: only file contents were flushed. Crash durability of the
         // directory entry itself depends on filesystem/storage semantics.
         // A production version needs tested power-loss guarantees.
+    }
+
+    private void VerifyProtectedDirectory()
+    {
+        if (_requiredOwnerSid is null) return;
+
+        // Defense in depth only: this detects ACL drift before reservation.
+        // It cannot defeat a same-user adversary replacing an ancestor
+        // between validation and CreateNew; do not enable runtime moves.
+        OwnerOnlyReplayDirectoryPrototype.VerifyActualDirectoryAcl(
+            _directory, _requiredOwnerSid);
     }
 
     private static void EnsurePlainDirectory(string directory)
