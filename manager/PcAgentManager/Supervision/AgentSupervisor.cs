@@ -26,7 +26,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
     private bool _manualStopRequested;
     private bool _disposed;
     private int _recentCrashCount;
-    private string? _pendingApprovalOperationId;
+    private string? _pendingApprovalInstanceKey;
 
     public event EventHandler<ManagerSnapshot>? SnapshotChanged;
     public event Action<PendingApprovalSnapshot?>? PendingApprovalChanged;
@@ -530,17 +530,19 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
     private void PublishPendingApproval(PendingApprovalSnapshot? pending)
     {
-        var operationId = pending?.OperationId;
+        var operationKey = pending is null
+            ? null
+            : pending.OperationId + ":" + pending.ApprovalNonce;
 
         if (string.Equals(
-                _pendingApprovalOperationId,
-                operationId,
+                _pendingApprovalInstanceKey,
+                operationKey,
                 StringComparison.Ordinal))
         {
             return;
         }
 
-        _pendingApprovalOperationId = operationId;
+        _pendingApprovalInstanceKey = operationKey;
         PendingApprovalChanged?.Invoke(pending);
     }
 
