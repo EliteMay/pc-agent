@@ -2137,6 +2137,26 @@ Run("Crash after durable approval reservation blocks move replay after restart",
     }
 });
 
+
+Run("Manager creates unique unpredictable private Agent pipe names", () =>
+{
+    var prefix = AgentSupervisor.BuildPipeName();
+    var first = AgentSupervisor.BuildPrivatePipeName();
+    var second = AgentSupervisor.BuildPrivatePipeName();
+
+    Require(first.StartsWith(prefix + "-", StringComparison.Ordinal),
+        "private pipe must retain the local user scoped prefix");
+    Require(second.StartsWith(prefix + "-", StringComparison.Ordinal),
+        "second pipe must retain the user prefix");
+    Require(!string.Equals(first, second, StringComparison.Ordinal),
+        "each new Manager instance must have an independent pipe name");
+    Require(first.Length == prefix.Length + 33,
+        "private pipe suffix must contain 128 bits of randomness in hex");
+    Require(first[(prefix.Length + 1)..].All(Uri.IsHexDigit),
+        "private suffix must be a hex nonce");
+    Require(!first.Contains('\\'), "pipe name must contain no path separators");
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
