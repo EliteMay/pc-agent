@@ -532,6 +532,203 @@ Run("Windows move prototype fails when a competing target appears at the native 
     }
 });
 
+
+Run("Windows approval snapshot permits an unchanged authorized file move", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveApprovalTests", Guid.NewGuid().ToString("N"));
+    var targetParent = Path.Combine(root, "incoming");
+    Directory.CreateDirectory(targetParent);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(targetParent, "new.txt");
+        File.WriteAllText(source, "approved bytes");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root);
+        WindowsNoReplaceMovePrototype.MoveFileForTest(
+            source, destination, approved: approved);
+
+        Require(!File.Exists(source), "approved source must be moved");
+        Equal("approved bytes", File.ReadAllText(destination), "approved result bytes");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Windows approval snapshot refuses a same-byte source replacement", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveApprovalTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var original = Path.Combine(root, "old-original.txt");
+        var destination = Path.Combine(root, "destination.txt");
+        File.WriteAllText(source, "identical contents");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root);
+
+        File.Move(source, original);
+        File.WriteAllText(source, "identical contents");
+
+        var refused = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source, destination, approved: approved);
+        }
+        catch (InvalidOperationException)
+        {
+            refused = true;
+        }
+
+        Require(refused, "approval must not authorize a substituted file object");
+        Require(!File.Exists(destination), "no destination may be created");
+        Equal("identical contents", File.ReadAllText(source), "replacement must survive");
+        Equal("identical contents", File.ReadAllText(original), "original must survive");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Windows approval snapshot refuses destination parent replacement", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveApprovalTests", Guid.NewGuid().ToString("N"));
+    var parent = Path.Combine(root, "incoming");
+    var movedParent = Path.Combine(root, "previous-parent");
+    Directory.CreateDirectory(parent);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(parent, "new.txt");
+        File.WriteAllText(source, "do not move");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root);
+
+        Directory.Move(parent, movedParent);
+        Directory.CreateDirectory(parent);
+
+        var refused = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source, destination, approved: approved);
+        }
+        catch (InvalidOperationException)
+        {
+            refused = true;
+        }
+
+        Require(refused, "destination parent object substitution must be refused");
+        Equal("do not move", File.ReadAllText(source), "source remains");
+        Require(!File.Exists(destination), "replacement parent must not receive moved file");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Windows approval snapshot detects destination-parent swap at precommit test barrier", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveApprovalTests", Guid.NewGuid().ToString("N"));
+    var parent = Path.Combine(root, "incoming");
+    var oldParent = Path.Combine(root, "displaced");
+    Directory.CreateDirectory(parent);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(parent, "new.txt");
+        File.WriteAllText(source, "protected source");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root);
+
+        var refused = false;
+        var callbackInvoked = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source,
+                destination,
+                beforeNativeRename: () =>
+                {
+                    Directory.Move(parent, oldParent);
+                    Directory.CreateDirectory(parent);
+                    callbackInvoked = true;
+                },
+                approved: approved);
+        }
+        catch (InvalidOperationException)
+        {
+            refused = true;
+        }
+
+        Require(callbackInvoked, "attack setup must run before rejecting");
+        Require(refused, "parent swap at test barrier must be rejected");
+        Equal("protected source", File.ReadAllText(source), "source preserved");
+        Require(!File.Exists(destination), "swapped parent receives no file");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Windows approval snapshot refuses source outside its allowed root", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var baseDir = Path.Combine(Path.GetTempPath(), "PcAgentMoveApprovalTests", Guid.NewGuid().ToString("N"));
+    var allowedRoot = Path.Combine(baseDir, "allowed");
+    Directory.CreateDirectory(allowedRoot);
+
+    try
+    {
+        var source = Path.Combine(baseDir, "outside.txt");
+        var destination = Path.Combine(allowedRoot, "destination.txt");
+        File.WriteAllText(source, "private outside content");
+
+        var rejected = false;
+        try
+        {
+            _ = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+                source, destination, allowedRoot);
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+
+        Require(rejected, "outside source must not pass approval capture");
+        Equal("private outside content", File.ReadAllText(source), "source preserved");
+        Require(!File.Exists(destination), "destination not created");
+    }
+    finally
+    {
+        Directory.Delete(baseDir, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
