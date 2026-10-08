@@ -2,7 +2,6 @@ import { createCreateDirectoryTool } from "./create-directory.js";
 import { createWriteTextFileTool } from "./write-text-file.js";
 import { createEditTextFileTool } from "./edit-text-file.js";
 import { createCopyFileTool } from "./copy-file.js";
-import { createMovePathTool } from "./move-path.js";
 export { SafeWriteToolError } from "./safe-write-common.js";
 
 export function registerSafeWriteTools(registry, options = {}) {
@@ -37,9 +36,9 @@ export function registerSafeWriteTools(registry, options = {}) {
     maxCopyFileBytes: options.maxCopyFileBytes
   }));
 
-  registry.register(createMovePathTool({
-    allowedRoots: [...allowedRoots]
-  }));
+  // move_path is deliberately NOT registered until an atomic Windows
+  // no-clobber provider and path-race tests pass (security gate: issue #27).
+  // A check-then-rename implementation is unsafe under concurrent changes.
 
   return registry;
 }
