@@ -419,6 +419,105 @@ Run("Update bootstrap only accepts candidate executables inside release root", (
 });
 
 
+
+Run("Windows move prototype renames one file without replacing another", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNoReplacePrototype", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(root, "destination.txt");
+        File.WriteAllText(source, "approved source");
+
+        WindowsNoReplaceMovePrototype.MoveFileForTest(source, destination);
+
+        Require(!File.Exists(source), "source must be moved");
+        Equal("approved source", File.ReadAllText(destination), "moved bytes");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Windows move prototype refuses a preexisting target without losing data", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNoReplacePrototype", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(root, "destination.txt");
+        File.WriteAllText(source, "original source");
+        File.WriteAllText(destination, "protected target");
+
+        var refused = false;
+
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(source, destination);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            refused = true;
+        }
+
+        Require(refused, "existing destination must be rejected by Windows");
+        Equal("original source", File.ReadAllText(source), "source preserved");
+        Equal("protected target", File.ReadAllText(destination), "destination preserved");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Windows move prototype fails when a competing target appears at the native boundary", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentNoReplacePrototype", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(root, "destination.txt");
+        File.WriteAllText(source, "original source");
+
+        var refused = false;
+
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source,
+                destination,
+                beforeNativeRename: () => File.WriteAllText(
+                    destination,
+                    "concurrently created target"));
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            refused = true;
+        }
+
+        Require(refused, "native rename must refuse the competing target");
+        Equal("original source", File.ReadAllText(source), "source preserved");
+        Equal("concurrently created target", File.ReadAllText(destination), "competing target preserved");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
