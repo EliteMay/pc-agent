@@ -66,6 +66,16 @@ export async function executeRegisteredCommand({
         code
       );
     }
+
+    // Approval itself can take time. A command that expires while the
+    // user is deciding must never execute, even if approval arrived last.
+    // Use the actual execution clock, not the initial envelope validation time.
+    if (Date.parse(validatedCommand.expires_at) <= Date.now()) {
+      throw new AgentRuntimeError(
+        "Local approval arrived after the command expired.",
+        "LOCAL_APPROVAL_EXPIRED"
+      );
+    }
   }
 
   return executeOnce({

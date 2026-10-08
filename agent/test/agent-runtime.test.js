@@ -11,6 +11,7 @@ import { ToolRegistry } from "../src/tools/tool-registry.js";
 import { registerReadOnlyTools } from "../src/tools/read-only-tools.js";
 import { OperationJournal } from "../src/journal/operation-journal.js";
 import { executeRegisteredCommand } from "../src/execution/agent-runtime.js";
+import { createNotepadGuiTool } from "../src/tools/notepad-gui.js";
 
 function command(overrides = {}) {
   return {
@@ -255,6 +256,51 @@ test("denied local approval prevents execution and journal creation", async () =
 
     assert.equal(executions, 0);
     assert.equal(journal.getOperation("op-read-1"), null);
+  } finally {
+    journal.close();
+  }
+});
+
+test("an approval accepted after expiration cannot send Notepad input", async () => {
+  const journal = new OperationJournal(":memory:");
+  const registry = new ToolRegistry();
+  let inputs = 0;
+  registry.register(createNotepadGuiTool({
+    platform: "win32",
+    env: { SystemRoot: "C:\\Windows", TEMP: "C:\\Temp" },
+    runCommand: async () => {
+      inputs += 1;
+      return { stdout: '{"target":"notepad","action":"click","dispatched":true,"verified":false}', stderr: "" };
+    }
+  }));
+
+  try {
+    await assert.rejects(
+      executeRegisteredCommand({
+        registry,
+        journal,
+        // The injected clock intentionally starts within this long-past
+        // window. Actual wall time after the approval is past its expiry.
+        now: new Date("2000-01-01T12:00:00.000Z"),
+        command: command({
+          tool: "notepad_gui",
+          operation_id: "op-expired-approval",
+          args: { action: "click", x: 5, y: 5 },
+          created_at: "2000-01-01T00:00:00.000Z",
+          expires_at: "2000-01-02T00:00:00.000Z"
+        }),
+        approvalProvider: {
+          async requestApproval(request) {
+            assert.equal(request.risk, "high");
+            assert.equal(request.summary.operation, "click");
+            return "approved";
+          }
+        }
+      }),
+      (error) => error?.code === "LOCAL_APPROVAL_EXPIRED"
+    );
+    assert.equal(inputs, 0);
+    assert.equal(journal.getOperation("op-expired-approval"), null);
   } finally {
     journal.close();
   }
