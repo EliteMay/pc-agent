@@ -40,9 +40,9 @@ public static class PcAgentNotepadInput {
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint from, uint to, bool attach);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hwnd);
-    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
 
     public static bool Activate(IntPtr hwnd) {
+        if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return false;
         if (GetForegroundWindow() == hwnd) return true;
         // Windows normally forbids a background process from stealing focus.
         // Attach temporarily to the actual foreground thread so an approved
@@ -54,13 +54,15 @@ public static class PcAgentNotepadInput {
         bool attached = foregroundThread != 0 && foregroundThread != currentThread
             && AttachThreadInput(currentThread, foregroundThread, true);
         try {
-            ShowWindow(hwnd, 5); // SW_SHOW; minimized targets were already rejected
+            // Never call ShowWindow here. The hidden PowerShell launcher sets
+            // STARTF_USESHOWWINDOW=SW_HIDE. A first ShowWindow call may honor
+            // that startup flag instead and hide the target Notepad window.
             BringWindowToTop(hwnd);
             SetForegroundWindow(hwnd);
         } finally {
             if (attached) AttachThreadInput(currentThread, foregroundThread, false);
         }
-        return GetForegroundWindow() == hwnd;
+        return GetForegroundWindow() == hwnd && IsWindowVisible(hwnd) && !IsIconic(hwnd);
     }
 
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
@@ -68,7 +70,8 @@ public static class PcAgentNotepadInput {
     private static extern uint SendInput(uint count, [In] INPUT[] inputs, int size);
 
     public static void RequireFocused(IntPtr hwnd) {
-        if (GetForegroundWindow() != hwnd) throw new InvalidOperationException("Notepad lost foreground focus.");
+        if (GetForegroundWindow() != hwnd || !IsWindowVisible(hwnd) || IsIconic(hwnd))
+            throw new InvalidOperationException("Notepad lost foreground focus or visibility.");
     }
 
     private static void Dispatch(INPUT input) {
@@ -158,7 +161,7 @@ if ($request.action -eq 'open') {
     }
     Assert-NoProtectedGame
     $notepadExecutable = [System.IO.Path]::Combine($env:SystemRoot, 'System32', 'notepad.exe')
-    Start-Process -FilePath $notepadExecutable -ArgumentList ('"' + $file + '"') -ErrorAction Stop | Out-Null
+    Start-Process -FilePath $notepadExecutable -ArgumentList ('"' + $file + '"') -WindowStyle Normal -ErrorAction Stop | Out-Null
     [Console]::Out.WriteLine((@{
         target = 'notepad'
         action = 'open'
@@ -256,6 +259,8 @@ switch ($request.action) {
     }
 }
 Assert-NoProtectedGame
+Start-Sleep -Milliseconds 150
+[PcAgentNotepadInput]::RequireFocused($target)
 [Console]::Out.WriteLine((@{
     target = 'notepad'
     action = [string]$request.action
