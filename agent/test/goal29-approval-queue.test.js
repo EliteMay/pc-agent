@@ -159,3 +159,35 @@ test("queued screenshot passes only with consent and stores a result hash, not i
     f.close();
   }
 });
+
+test("queued screenshot is never captured when local permission is missing or denied", async () => {
+  const f = fixture(envelope("capture_notepad", {}, "capture-denied"));
+  let captures = 0;
+  f.registry.register(createCaptureNotepadTool({
+    platform: "win32",
+    env: { SystemRoot: "C:\\Windows", TEMP: "C:\\Temp" },
+    runCapture: async () => {
+      captures += 1;
+      throw new Error("capture must not run without approval");
+    }
+  }));
+
+  try {
+    const missing = await runQueueOnce({
+      client: f.client, registry: f.registry, journal: f.journal
+    });
+    assert.equal(missing.status, "FAILED");
+    assert.equal(missing.error.code, "LOCAL_APPROVAL_REQUIRED");
+
+    const denied = await runQueueOnce({
+      client: f.client, registry: f.registry, journal: f.journal,
+      approvalProvider: { async requestApproval() { return "denied"; } }
+    });
+    assert.equal(denied.status, "FAILED");
+    assert.equal(denied.error.code, "LOCAL_APPROVAL_DENIED");
+    assert.equal(captures, 0);
+    assert.equal(f.journal.getOperation("operation-capture-denied"), null);
+  } finally {
+    f.close();
+  }
+});
