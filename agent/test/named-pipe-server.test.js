@@ -247,3 +247,92 @@ test("privileged IPC fails closed when no Manager launch credential was configur
     await server.close();
   }
 });
+
+
+test("named pipe handles only the first request per connection", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const pipeName = "PcAgent-OneRequest-" + randomUUID();
+  const approvalSecret = "d".repeat(64);
+  let approvals = 0;
+  let shutdowns = 0;
+  const server = createNamedPipeServer({
+    pipeName,
+    approvalSecret,
+    getHealth: () => ({ version: "test", protocol_version: 1 }),
+    onApprovalResponse() {
+      approvals += 1;
+      return { accepted: true };
+    },
+    onPrepareShutdown() {
+      shutdowns += 1;
+    }
+  });
+
+  await server.listen();
+  try {
+    const responses = await new Promise((resolve, reject) => {
+      const socket = net.createConnection("\\\\.\\pipe\\" + pipeName);
+      let received = "";
+      socket.setEncoding("utf8");
+      socket.once("error", reject);
+      socket.on("data", chunk => { received += chunk; });
+      socket.once("end", () => resolve(received));
+      socket.once("connect", () => {
+        const authorized = (method, params) => JSON.stringify({
+          id: method,
+          method,
+          params: { auth_token: approvalSecret, ...params }
+        }) + "\n";
+        socket.write(
+          authorized("respond_approval", {
+            operation_id: "op-one",
+            decision: "approved",
+            approval_nonce: "a".repeat(32)
+          })
+          + authorized("prepare_shutdown", {})
+        );
+      });
+    });
+
+    const lines = responses.trim().split("\n");
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]).ok, true);
+    assert.equal(approvals, 1);
+    assert.equal(shutdowns, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test("named pipe closes inactive connections without executing callbacks", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const pipeName = "PcAgent-Idle-" + randomUUID();
+  let responses = 0;
+  const server = createNamedPipeServer({
+    pipeName,
+    approvalSecret: "e".repeat(64),
+    getHealth: () => ({ version: "test", protocol_version: 1 }),
+    onApprovalResponse() {
+      responses += 1;
+      return { accepted: true };
+    }
+  });
+
+  await server.listen();
+  try {
+    const result = await Promise.race([
+      new Promise((resolve, reject) => {
+        const socket = net.createConnection("\\\\.\\pipe\\" + pipeName);
+        socket.once("error", reject);
+        socket.once("close", () => resolve("closed"));
+      }),
+      new Promise(resolve => setTimeout(() => resolve("timeout"), 8000))
+    ]);
+    assert.equal(result, "closed");
+    assert.equal(responses, 0);
+  } finally {
+    await server.close();
+  }
+});
