@@ -74,7 +74,7 @@ internal sealed class LocalApprovedNativeMoveWorkflowPrototype
             throw new InvalidOperationException("User did not approve the move.");
         }
 
-        ValidateProposal(proposal);
+        ValidateProposalForTest(proposal);
 
         return new ConfirmedMove(
             proposal,
@@ -98,7 +98,7 @@ internal sealed class LocalApprovedNativeMoveWorkflowPrototype
             throw new ArgumentNullException(nameof(confirmed));
         }
 
-        ValidateProposal(confirmed.Proposal);
+        ValidateProposalForTest(confirmed.Proposal);
 
         var request = confirmed.Proposal.Request;
         _ticketIssuer.ConsumeForTest(
@@ -119,7 +119,7 @@ internal sealed class LocalApprovedNativeMoveWorkflowPrototype
             useNativeRelativeMoveForTest: true);
     }
 
-    private static void ValidateProposal(Proposal proposal)
+    internal static void ValidateProposalForTest(Proposal proposal)
     {
         if (proposal is null || proposal.Request is null
             || proposal.FilesystemSnapshot is null)
