@@ -56,7 +56,7 @@ test("safe write tools require local confirmation", () => {
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ["create_directory", "edit_text_file", "write_text_file"]
+      ["copy_file", "create_directory", "edit_text_file", "move_path", "write_text_file"]
     );
 
     for (const tool of tools) {
