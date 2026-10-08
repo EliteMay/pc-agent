@@ -63,3 +63,23 @@ Desktop Commanderは本番経路に含めない。Supabase側のローカル承�
 - [ ] Issue #29本来の4項目の完成条件は未達、家PCにはまだ接続していない。**診断成功と実操作成功を混同しないこと。**
 
 **次の進め方：** SitesのWorkセッションに戻り、同セッションの `sites-mcp` / `SKILL.md` にある下流連携 `allowed` 判定を実際に確認する。対応するOAuthアプリ・下流プラグインが正式に `allowed` であることが確かめられる場合に限り、Siteからの正規OAuth認証を安全に試す。判定を証明できない場合はそこで止め、実装や認証情報の注入をしない。
+
+
+## 2026-10-09 正式適格性照会の未提供を確認
+
+ChatGPT Workで検証し、[保存ログ](https://github.com/EliteMay/web-project-data/blob/main/conversations/2026/10/conv-20261009-pc-agent-web-bridge/interactions/2026-10-08/int-20261008T163904Z-allowed-gate-check.json) を読み直して内容を照合した。
+
+- Site: active、本人所有、`access_mode=custom`、許可ユーザー1、外部閲覧者0。Siteの`hosting.json`には固定診断用MCPがあり、下流Pluginやconnectorの宣言は**ない**。
+- Sites building skill 0.1.75 `references/plugin-tools.md` が求める **`sites_list_plugin_eligibility`** は当該Workセッションの利用可能ツール一覧に存在せず、別名の正式照会機能も提供されなかった。今回の通常チャット側からも同名機能は利用不能。
+- そのため `allowed` でも `denied` でもなく **未判定**。プラン制限、管理者拒否、既存Plugin自体の不適格性は**未確認**である。所有、Pluginインストール、通常の権限、Supabase OAuth実装、HTTPS URL、Site内からの直接HTTP呼出しは`allowed`の代替にしない。
+- Supabase OAuth Gateway: ACTIVE デプロイv14、ソースで`withOAuthProtectedResource`、ユーザー認証、許可ユーザー照合を確認。Siteからの実OAuth同意・認証済み診断の成功は未確認。
+- [Chrome固定診断結果](https://github.com/EliteMay/web-project-data/blob/main/research/studies/pc-agent/chrome-plugin-verification.md)は **web-project-data** に存在する。以前「pc-agent/mainに見つからない」と記録したのはGitHub保存先が別であったためで、Site内部にしかないと推測する必要はない。
+
+### 今後の再開トリガー
+
+1. OpenAI Help Centerサポートに「このSiteで`sites_list_plugin_eligibility`が提供されないのは正常か、利用可能にする正式な方法があるか」を照会する。**サポートが機能を有効化できると決めつけない**。
+2. **正式な**照会機能が実際に提供された場合だけ、対象Siteの実`project_id`で既存Gateway Pluginが`allowed`かどうか、canonical ID・connector所属・利用可能なnative actionsを照合する。
+3. `allowed`と必要な診断操作が確認されるまで、Siteの下流Plugin接続、環境変数・権限変更、認証情報の注入、PCコマンドは**実施しない**。繰り返し同じWork照会を依頼するだけのループは避ける。
+4. 条件を満たした場合は本人が通常OAuth同意し、まずPC非接触のGateway診断を試す。未認証・拒否・失効・他ユーザー拒否を検証してからPC `ping`に進む。
+
+参照: [OpenAIサポートへの問い合わせ](https://help.openai.com/en/articles/6614161-how-can-i-contact-support)。
