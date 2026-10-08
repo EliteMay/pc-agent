@@ -2054,6 +2054,85 @@ Run("Isolated native move workflow rejects expired authorization without reserva
     }
 });
 
+
+Run("Crash after durable approval reservation blocks move replay after restart", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveFlowTests", Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(root, "allowed");
+    var journal = Path.Combine(root, "replay");
+    Directory.CreateDirectory(allowed);
+
+    try
+    {
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(allowed, "target.txt");
+        File.WriteAllText(source, "must not move on retry");
+        var key = Enumerable.Repeat((byte)0x66, 32).ToArray();
+        var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+        var crashed = false;
+
+        using (var signer = new LocalMoveApprovalTicketPrototype(
+            key, new DurableMoveApprovalReplayStorePrototype(journal)))
+        {
+            var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+            var proposal = workflow.ProposeForTest(
+                "cmd-crash", "device-crash", "op-crash",
+                source, destination, allowed);
+            var confirmed = workflow.ConfirmForTest(proposal, true, now);
+
+            try
+            {
+                workflow.ExecuteForTest(
+                    confirmed, now.AddSeconds(1),
+                    afterTicketConsumedBeforeMoveForTest: () =>
+                        throw new IOException("Simulated process termination at commit barrier"));
+            }
+            catch (IOException)
+            {
+                crashed = true;
+            }
+        }
+
+        Require(crashed, "test must interrupt execution after durable reservation");
+        Equal(1, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "crash leaves a durable operation marker");
+        Equal("must not move on retry", File.ReadAllText(source),
+            "no native move occurred after simulated interruption");
+
+        using (var restartedSigner = new LocalMoveApprovalTicketPrototype(
+            key, new DurableMoveApprovalReplayStorePrototype(journal)))
+        {
+            var restarted = new LocalApprovedNativeMoveWorkflowPrototype(restartedSigner);
+            var proposal = restarted.ProposeForTest(
+                "cmd-crash", "device-crash", "op-crash",
+                source, destination, allowed);
+            var ticket = restarted.ConfirmForTest(
+                proposal, true, now.AddSeconds(2));
+
+            var denied = false;
+            try
+            {
+                restarted.ExecuteForTest(ticket, now.AddSeconds(3));
+            }
+            catch (InvalidOperationException)
+            {
+                denied = true;
+            }
+            Require(denied, "restarted Manager must reject an uncertain operation");
+        }
+
+        Require(!File.Exists(destination), "replay never creates destination");
+        Equal(1, Directory.EnumerateFiles(journal, "*.used").Count(),
+            "no second durable reservation");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
