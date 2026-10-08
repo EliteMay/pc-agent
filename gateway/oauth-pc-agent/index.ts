@@ -354,6 +354,10 @@ function mcpCaptureResult(id: unknown, payload: any) {
   });
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function mcpError(id: unknown, code: number, message: string) {
   return json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 }
@@ -1029,7 +1033,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_begin_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -1042,7 +1046,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_status_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -1056,7 +1060,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_finish_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -1147,7 +1151,7 @@ const handler = async (req: Request, ctx: any) => {
           try {
             const gatewayError = {
               errorCode: "gateway_error",
-              message: error?.message ?? String(error),
+              message: errorMessage(error),
             };
             await finishTaskStep(ctx, {
               taskId: args?.task_id,
@@ -1163,7 +1167,7 @@ const handler = async (req: Request, ctx: any) => {
         return mcpResult(body.id, {
           success: false,
           errorCode: "task_step_error",
-          message: error?.message ?? String(error),
+          message: errorMessage(error),
           retryable: false,
         }, true);
       }
@@ -1187,7 +1191,7 @@ const handler = async (req: Request, ctx: any) => {
       return mcpResult(body.id, {
         success: false,
         errorCode: "gateway_error",
-        message: error?.message ?? String(error),
+        message: errorMessage(error),
         retryable: true,
       }, true);
     }
