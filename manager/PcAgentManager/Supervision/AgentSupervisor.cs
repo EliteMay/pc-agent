@@ -445,7 +445,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
     private async Task MonitorHealthAsync(Process process, CancellationToken cancellationToken)
     {
-        var pipe = new NamedPipeAgentClient(_pipeName);
+        var pipe = new NamedPipeAgentClient(_pipeName, _localApprovalSecret);
 
         while (!cancellationToken.IsCancellationRequested && !process.HasExited)
         {
