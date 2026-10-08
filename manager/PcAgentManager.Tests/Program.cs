@@ -2256,6 +2256,116 @@ Run("Manager rejects oversized local IPC replies before parsing JSON", () =>
     Require(rejected, "a large IPC reply must be refused before deserialization");
 });
 
+
+Run("Windows owner-only pipe creates a protected on-handle DACL without broad grants", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var name = "PcAgentAclTest-" + Guid.NewGuid().ToString("N");
+    using var server = OwnerOnlyNamedPipePrototype.CreateForCurrentUser(name);
+    var userSid = System.Security.Principal.WindowsIdentity.GetCurrent().User
+        ?? throw new InvalidOperationException("Missing Windows user SID");
+
+    // Verify the kernel object's actual descriptor, not merely the intended
+    // in-memory PipeSecurity that was passed into the factory.
+    OwnerOnlyNamedPipePrototype.VerifyActualDacl(server, userSid);
+
+    var actual = server.GetAccessControl();
+    var accessRules = actual.GetAccessRules(
+        includeExplicit: true,
+        includeInherited: true,
+        targetType: typeof(System.Security.Principal.SecurityIdentifier));
+
+    Equal(1, accessRules.Count, "owner-only pipe must have one allow rule");
+    Require(actual.AreAccessRulesProtected,
+        "the actual native pipe DACL must not inherit ACL entries");
+    var only = accessRules[0] as System.IO.Pipes.PipeAccessRule
+        ?? throw new InvalidOperationException("Expected a pipe access rule");
+    Equal(userSid.Value, only.IdentityReference.Value,
+        "owner must be the only Windows user granted access");
+    Equal(System.Security.AccessControl.AccessControlType.Allow,
+        only.AccessControlType, "only owner allow rule must be present");
+
+    foreach (var forbidden in new[]
+    {
+        System.Security.Principal.WellKnownSidType.WorldSid,
+        System.Security.Principal.WellKnownSidType.AnonymousSid,
+        System.Security.Principal.WellKnownSidType.BuiltinUsersSid
+    })
+    {
+        var forbiddenSid = new System.Security.Principal.SecurityIdentifier(
+            forbidden, null);
+        Require(!string.Equals(only.IdentityReference.Value, forbiddenSid.Value,
+                StringComparison.Ordinal),
+            "a broad Windows group cannot be the granted principal");
+    }
+});
+
+Run("Windows owner-only pipe permits same-user round-trip and refuses invalid names", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var name = "PcAgentAclTest-" + Guid.NewGuid().ToString("N");
+    using var server = OwnerOnlyNamedPipePrototype.CreateForCurrentUser(name);
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+    var listener = Task.Run(async () =>
+    {
+        await server.WaitForConnectionAsync(timeout.Token);
+        var request = new byte[4];
+        await server.ReadExactlyAsync(request, timeout.Token);
+        Equal("PING", Encoding.ASCII.GetString(request),
+            "local same-user request arrives over protected Windows pipe");
+        await server.WriteAsync(Encoding.ASCII.GetBytes("PONG"), timeout.Token);
+        await server.FlushAsync(timeout.Token);
+    });
+
+    using var client = new NamedPipeClientStream(
+        ".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+    client.Connect(2000);
+    client.Write(Encoding.ASCII.GetBytes("PING"));
+    client.Flush();
+    var reply = new byte[4];
+    client.ReadExactly(reply);
+    Equal("PONG", Encoding.ASCII.GetString(reply), "same-user reply is received");
+    listener.GetAwaiter().GetResult();
+
+    var invalidRejected = false;
+    try
+    {
+        using var ignored = OwnerOnlyNamedPipePrototype.CreateForCurrentUser(
+            @"PcAgentAclTest-..\\other-user");
+    }
+    catch (ArgumentException)
+    {
+        invalidRejected = true;
+    }
+    Require(invalidRejected, "proof-of-concept cannot bind arbitrary pipe names");
+});
+
+Run("Windows ACL pipe factory fails closed if another process already owns the name", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var name = "PcAgentAclTest-" + Guid.NewGuid().ToString("N");
+    using var squat = new NamedPipeServerStream(
+        name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+        PipeOptions.Asynchronous);
+
+    var denied = false;
+    try
+    {
+        using var unexpected = OwnerOnlyNamedPipePrototype.CreateForCurrentUser(name);
+    }
+    catch (Exception error) when (error is IOException
+        or UnauthorizedAccessException)
+    {
+        denied = true;
+    }
+
+    Require(denied, "preexisting pipe instance must never be reused as trusted ACL listener");
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
