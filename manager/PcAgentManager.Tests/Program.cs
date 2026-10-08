@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Forms;
 using PcAgentManager.Services;
 using PcAgentManager.Configuration;
 using PcAgentManager.Supervision;
