@@ -150,11 +150,12 @@ const TOOLS = [
   {
     name: "notepad_gui",
     title: "Click, type, scroll, or save in Notepad with local approval",
-    description: "One strictly bounded action in the sole visible Notepad window. Requires physical PC Manager approval every time. Use capture_notepad afterward to verify the visible result.",
+    description: "Open one allowed .txt file or perform one strictly bounded action in the sole visible Notepad window. Requires physical PC Manager approval every time. Use capture_notepad afterward to verify the visible result.",
     inputSchema: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["click", "type", "scroll", "save"] },
+        action: { type: "string", enum: ["open", "click", "type", "scroll", "save"] },
+        path: { type: "string", minLength: 6, maxLength: 512 },
         x: { type: "integer", minimum: 0, maximum: 3840 },
         y: { type: "integer", minimum: 0, maximum: 3840 },
         text: { type: "string", minLength: 1, maxLength: 500 },
@@ -417,7 +418,14 @@ function validateToolArgs(name: string, args: any) {
     }
     const keys = Object.keys(args);
     let allowed: string[] = [];
-    if (args.action === "click") {
+    if (args.action === "open") {
+      allowed = ["action", "path"];
+      if (typeof args.path !== "string" || args.path.length < 6 || args.path.length > 512
+        || !/^(?:[A-Za-z]:[\\\\]|[\\\\]{2}[^\\\\]+[\\\\][^\\\\]+)/.test(args.path)
+        || !/\.txt$/i.test(args.path) || /[\u0000-\u001f\u007f]/u.test(args.path)) {
+        throw new Error("open requires an absolute Windows .txt file path");
+      }
+    } else if (args.action === "click") {
       allowed = ["action", "x", "y"];
       if (![args.x, args.y].every((v) => Number.isSafeInteger(v) && v >= 0 && v <= 3840)) {
         throw new Error("click requires bounded integer client coordinates");
