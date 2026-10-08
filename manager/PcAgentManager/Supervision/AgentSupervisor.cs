@@ -43,9 +43,16 @@ public sealed class AgentSupervisor : IAsyncDisposable
         _configStore = configStore;
         _emergencyStopStore = emergencyStopStore;
         _logger = logger;
-        _pipeName = BuildPipeName();
+        // A fresh unpredictable pipe name per Manager instance makes
+        // pre-binding (pipe-name squatting) substantially harder. It is not
+        // a substitute for a Windows security descriptor or IPC auth.
+        _pipeName = BuildPrivatePipeName();
         Snapshot = ManagerSnapshot.Stopped(emergencyStopStore.IsEngaged);
     }
+
+    public static string BuildPrivatePipeName() =>
+        BuildPipeName() + "-" +
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     public static string BuildPipeName()
     {
