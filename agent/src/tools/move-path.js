@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -19,6 +20,22 @@ import {
   sameWindowsVolume
 } from "./safe-path-ops-common.js";
 
+function fingerprintSource(stats) {
+  const fields = [
+    stats.dev,
+    stats.ino,
+    stats.size,
+    stats.mode,
+    stats.mtimeNs,
+    stats.ctimeNs,
+    stats.birthtimeNs
+  ];
+
+  return createHash("sha256")
+    .update(fields.map(String).join("|"))
+    .digest("hex");
+}
+
 export function createMovePathTool({ allowedRoots }) {
   function plan(args) {
     requireWindowsForWrite();
@@ -31,7 +48,7 @@ export function createMovePathTool({ allowedRoots }) {
       rejectRootSource: true
     });
 
-    const stats = lstatSync(transfer.sourcePath);
+    const stats = lstatSync(transfer.sourcePath, { bigint: true });
 
     if (!stats.isFile() && !stats.isDirectory()) {
       throw new SafeWriteToolError(
@@ -69,7 +86,8 @@ export function createMovePathTool({ allowedRoots }) {
       ...transfer,
       sourceType: stats.isDirectory()
         ? "directory"
-        : "file"
+        : "file",
+      sourceFingerprint: fingerprintSource(stats)
     });
   }
 
@@ -88,7 +106,8 @@ export function createMovePathTool({ allowedRoots }) {
         action: "move_path",
         source_path: planned.sourcePath,
         destination_path: planned.destinationPath,
-        source_type: planned.sourceType
+        source_type: planned.sourceType,
+        source_fingerprint: planned.sourceFingerprint
       });
     },
     async execute(args) {
