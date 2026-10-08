@@ -24,6 +24,7 @@ const WRITE_TOOLS = new Set([
 ]);
 
 const SENSITIVE_READ_TOOLS = new Set(["capture_notepad"]);
+const GUI_TOOLS = new Set(["notepad_gui"]);
 
 const DEVELOPMENT_TOOLS = new Set([
   "run_development_command",
@@ -32,6 +33,7 @@ const DEVELOPMENT_TOOLS = new Set([
 const DEVICE_TOOLS = new Set([
   ...READ_ONLY_TOOLS,
   ...SENSITIVE_READ_TOOLS,
+  ...GUI_TOOLS,
   ...WRITE_TOOLS,
   ...DEVELOPMENT_TOOLS,
 ]);
@@ -144,6 +146,25 @@ const TOOLS = [
     description: "Capture only one visible Notepad window. Requires an explicit local Manager approval; the image is transmitted to ChatGPT and removed from the command result after retrieval.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "notepad_gui",
+    title: "Click, type, scroll, or save in Notepad with local approval",
+    description: "One strictly bounded action in the sole visible Notepad window. Requires physical PC Manager approval every time. Use capture_notepad afterward to verify the visible result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["click", "type", "scroll", "save"] },
+        x: { type: "integer", minimum: 0, maximum: 3840 },
+        y: { type: "integer", minimum: 0, maximum: 3840 },
+        text: { type: "string", minLength: 1, maxLength: 500 },
+        direction: { type: "string", enum: ["up", "down"] },
+        steps: { type: "integer", minimum: 1, maximum: 3 },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "create_directory",
@@ -390,6 +411,38 @@ async function newestDevice(ctx: any) {
 }
 
 function validateToolArgs(name: string, args: any) {
+  if (name === "notepad_gui") {
+    if (!args || typeof args !== "object" || Array.isArray(args)) {
+      throw new Error("notepad_gui requires an action object");
+    }
+    const keys = Object.keys(args);
+    let allowed: string[] = [];
+    if (args.action === "click") {
+      allowed = ["action", "x", "y"];
+      if (![args.x, args.y].every((v) => Number.isSafeInteger(v) && v >= 0 && v <= 3840)) {
+        throw new Error("click requires bounded integer client coordinates");
+      }
+    } else if (args.action === "type") {
+      allowed = ["action", "text"];
+      if (typeof args.text !== "string" || args.text.length < 1 || args.text.length > 500
+          || /[\u0000-\u0008\u000b-\u001f\u007f]/u.test(args.text)) {
+        throw new Error("type requires bounded text without control codes");
+      }
+    } else if (args.action === "scroll") {
+      allowed = ["action", "direction", "steps"];
+      if (!["up", "down"].includes(args.direction)
+          || !Number.isSafeInteger(args.steps) || args.steps < 1 || args.steps > 3) {
+        throw new Error("scroll requires direction and 1 to 3 steps");
+      }
+    } else if (args.action === "save") {
+      allowed = ["action"];
+    } else {
+      throw new Error("notepad_gui action is not supported");
+    }
+    if (keys.length !== allowed.length || keys.some((key) => !allowed.includes(key))) {
+      throw new Error("Unexpected or missing notepad_gui arguments");
+    }
+  }
   if (name === "capture_notepad" && (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length !== 0)) {
     throw new Error("capture_notepad accepts no arguments");
   }
@@ -809,7 +862,7 @@ async function enqueueTool(ctx: any, toolName: string, args: unknown, taskMetada
 
   const isWriteTool = WRITE_TOOLS.has(toolName);
   const isDevelopmentTool = DEVELOPMENT_TOOLS.has(toolName);
-  const requiresLocalApproval = isWriteTool || isDevelopmentTool || SENSITIVE_READ_TOOLS.has(toolName);
+  const requiresLocalApproval = isWriteTool || isDevelopmentTool || SENSITIVE_READ_TOOLS.has(toolName) || GUI_TOOLS.has(toolName);
   const queuedStatus = "agent_queued";
   const claimedStatus = "agent_claimed";
 
