@@ -15,6 +15,7 @@ import {
   sha256Buffer
 } from "./safe-write-common.js";
 import {
+  fingerprintPathStats,
   planPathTransfer,
   requireSourceDestinationArgs
 } from "./safe-path-ops-common.js";
@@ -43,7 +44,7 @@ export function createCopyFileTool({
       rejectRootSource: false
     });
 
-    const stats = lstatSync(transfer.sourcePath);
+    const stats = lstatSync(transfer.sourcePath, { bigint: true });
 
     if (!stats.isFile()) {
       throw new SafeWriteToolError(
@@ -52,7 +53,7 @@ export function createCopyFileTool({
       );
     }
 
-    if (stats.size > maxCopyFileBytes) {
+    if (stats.size > BigInt(maxCopyFileBytes)) {
       throw new SafeWriteToolError(
         "Source file exceeds the configured copy limit.",
         "FILE_TOO_LARGE"
@@ -66,7 +67,8 @@ export function createCopyFileTool({
     return Object.freeze({
       ...transfer,
       bytes: sourceBytes.length,
-      sourceSha256: sha256Buffer(sourceBytes)
+      sourceSha256: sha256Buffer(sourceBytes),
+      sourceFingerprint: fingerprintPathStats(stats)
     });
   }
 
@@ -86,7 +88,8 @@ export function createCopyFileTool({
         source_path: planned.sourcePath,
         destination_path: planned.destinationPath,
         bytes: planned.bytes,
-        source_sha256: planned.sourceSha256
+        source_sha256: planned.sourceSha256,
+        source_fingerprint: planned.sourceFingerprint
       });
     },
     async execute(args) {
@@ -114,6 +117,18 @@ export function createCopyFileTool({
         throw new SafeWriteToolError(
           "Source path changed before copy.",
           "PATH_CHANGED_DURING_OPERATION"
+        );
+      }
+
+      const currentStats = lstatSync(
+        planned.sourcePath,
+        { bigint: true }
+      );
+
+      if (fingerprintPathStats(currentStats) !== planned.sourceFingerprint) {
+        throw new SafeWriteToolError(
+          "Source identity changed before copy.",
+          "SOURCE_CHANGED_DURING_OPERATION"
         );
       }
 
