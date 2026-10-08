@@ -81,6 +81,48 @@ internal sealed class LocalMoveDialogConsentPrototype
     }
 
     /// <summary>
+    /// Experimental real WinForms bridge. Only a local STA UI thread can
+    /// display this modal confirmation; no remote command may call it.
+    /// There is deliberately no MainForm/Agent/IPC call site yet.
+    /// </summary>
+    internal LocalApprovedNativeMoveWorkflowPrototype.ConfirmedMove
+        PromptOnManagerUiThreadForTest(
+            LocalApprovedNativeMoveWorkflowPrototype.Proposal proposal,
+            IWin32Window owner)
+    {
+        if (!OperatingSystem.IsWindows()
+            || Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
+        {
+            throw new InvalidOperationException(
+                "A real local Windows STA UI thread is required.");
+        }
+
+        ArgumentNullException.ThrowIfNull(owner);
+
+        var displayed = OpenForTest(proposal, DateTimeOffset.UtcNow);
+        try
+        {
+            using var dialog = new LocalMoveConfirmationFormPrototype(displayed);
+            var result = dialog.ShowDialog(owner);
+            return ResolveLocalDialogForTest(
+                displayed, result, DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            // If WinForms throws or the user dismisses the modal, no orphaned
+            // challenge may authorize a later operation.
+            lock (_gate)
+            {
+                if (_pending is not null
+                    && ReferenceEquals(_pending.Displayed, displayed))
+                {
+                    _pending = null;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Consume the exact displayed challenge once, even on denial or failure.
     /// DialogResult.Yes is an IN-PROCESS test stand-in for a future genuine
     /// Manager-local UI click. A remote bool, JSON object, copied challenge,
