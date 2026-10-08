@@ -83,3 +83,13 @@ ChatGPT Workで検証し、[保存ログ](https://github.com/EliteMay/web-projec
 4. 条件を満たした場合は本人が通常OAuth同意し、まずPC非接触のGateway診断を試す。未認証・拒否・失効・他ユーザー拒否を検証してからPC `ping`に進む。
 
 参照: [OpenAIサポートへの問い合わせ](https://help.openai.com/en/articles/6614161-how-can-i-contact-support)。
+
+
+## 2026-10-09 進路更新：Siteが直接OAuthクライアントになる方式
+
+- OpenAI AI支援サポートから、個人PlusのSitesサーバーから外部HTTPSへ接続してOAuth Auth Code + PKCEを実装することはSitesの想定範囲との案内を受領。ただし実OAuthの動作・権限・安全性の保証ではない。
+- **Sitesの管理下にあるconnected apps下流Plugin連携**と、**Sitesのユーザー管理OAuthクライアントからの外部API接続**は別方式。後者を採用する場合、既存の`sites_list_plugin_eligibility`の`allowed`判定を前提にはしない。connected appsを無理に有効化したり、許可済みと偽ることはしない。
+- 採用する次段階を[docs/issue-29-sites-oauth-stage1.md](./issue-29-sites-oauth-stage1.md) に定義。本人専用Siteログイン、サーバー側OAuth Auth Code+S256 PKCE、stateのセッション結合と使い捨て、暗号化トークン管理、既存Gatewayの**認証済み`tools/call gateway_probe`限定**、拒否・失効・別ユーザーのテストを必須とする。
+- 元のconnected appsの`allowed`待ちは**この採用経路に限って非該当の過去案**となった。先行の調査記録は削除せず、別方式を混同しないため残す。
+- この通常チャットは既存Sitesプロジェクトの編集・公開権限を持つツールがないため、Siteコードの更新・OAuthクライアント登録・シークレット入力・同意・実通信は**未実施**。引き続き固定`gateway_probe`のみ稼働、PC未接続。
+- 第1段階成功後も元のIssue #29の4条件は未完了。実PCとWindows Managerのローカル承認を後段で別途検証する。
