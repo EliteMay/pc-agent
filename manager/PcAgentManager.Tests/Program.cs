@@ -2531,6 +2531,154 @@ Run("Manager protected pipe denies a genuine different Windows account", () =>
     }
 });
 
+
+Run("Windows owner-only durable replay directory protects markers and denies replay after restart", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var name = "PcAgentReplayAclTest-" + Guid.NewGuid().ToString("N");
+    var root = OwnerOnlyReplayDirectoryPrototype.CreateNewTestDirectory(
+        Path.GetTempPath(), name);
+    try
+    {
+        var owner = System.Security.Principal.WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Missing Windows SID");
+        OwnerOnlyReplayDirectoryPrototype.VerifyActualDirectoryAcl(root, owner);
+
+        var first = new DurableMoveApprovalReplayStorePrototype(root);
+        first.Reserve("approved-operation-1");
+
+        var marker = Directory.GetFiles(root, "*.used").Single();
+        var acl = new FileInfo(marker).GetAccessControl(
+            System.Security.AccessControl.AccessControlSections.Access);
+        var rules = acl.GetAccessRules(
+            includeExplicit: true,
+            includeInherited: true,
+            targetType: typeof(System.Security.Principal.SecurityIdentifier));
+        Require(rules.Count > 0, "persisted marker must have an ACL");
+        foreach (System.Security.AccessControl.FileSystemAccessRule rule in rules)
+        {
+            Require(rule.IdentityReference.Value == owner.Value,
+                "marker must not inherit permissions granted to other users");
+            Require(rule.AccessControlType ==
+                System.Security.AccessControl.AccessControlType.Allow,
+                "marker ACL must contain owner-only allow rules");
+        }
+
+        var reopened = new DurableMoveApprovalReplayStorePrototype(root);
+        var refused = false;
+        try
+        {
+            reopened.Reserve("approved-operation-1");
+        }
+        catch (InvalidOperationException)
+        {
+            refused = true;
+        }
+        Require(refused, "a restarted Manager cannot reserve an already-used operation");
+        reopened.Reserve("approved-operation-2");
+        Equal(2, Directory.GetFiles(root, "*.used").Length,
+            "different operations get their own non-overwritten marker");
+        OwnerOnlyReplayDirectoryPrototype.VerifyActualDirectoryAcl(root, owner);
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Native replay ACL directory factory refuses preexisting and malformed names", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var name = "PcAgentReplayAclTest-" + Guid.NewGuid().ToString("N");
+    var root = OwnerOnlyReplayDirectoryPrototype.CreateNewTestDirectory(
+        Path.GetTempPath(), name);
+    try
+    {
+        var duplicateRejected = false;
+        try
+        {
+            _ = OwnerOnlyReplayDirectoryPrototype.CreateNewTestDirectory(
+                Path.GetTempPath(), name);
+        }
+        catch (System.ComponentModel.Win32Exception ex) when
+            (ex.NativeErrorCode == 183)
+        {
+            duplicateRejected = true;
+        }
+        Require(duplicateRejected,
+            "a preexisting journal directory must never be silently reused");
+
+        var invalidRejected = false;
+        try
+        {
+            _ = OwnerOnlyReplayDirectoryPrototype.CreateNewTestDirectory(
+                Path.GetTempPath(), "PcAgentReplayAclTest-..\\untrusted");
+        }
+        catch (ArgumentException)
+        {
+            invalidRejected = true;
+        }
+        Require(invalidRejected,
+            "replay ACL factory refuses arbitrary paths or traversal names");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Real different Windows user cannot inject a durable replay marker", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var alternateUser = Environment.GetEnvironmentVariable("PC_AGENT_TEST_ALT_USER");
+    var alternatePassword = Environment.GetEnvironmentVariable("PC_AGENT_TEST_ALT_PASSWORD");
+    var required = Environment.GetEnvironmentVariable("PC_AGENT_REQUIRE_ALT_USER_TEST") == "1";
+
+    if (string.IsNullOrWhiteSpace(alternateUser)
+        || string.IsNullOrWhiteSpace(alternatePassword))
+    {
+        if (required)
+        {
+            throw new InvalidOperationException(
+                "Mandatory Windows replay ACL cross-user credentials were not provisioned.");
+        }
+
+        Console.WriteLine("SKIP replay directory cross-user test: no alternate account");
+        return;
+    }
+
+    var name = "PcAgentReplayAclTest-" + Guid.NewGuid().ToString("N");
+    var root = OwnerOnlyReplayDirectoryPrototype.CreateNewTestDirectory(
+        Path.GetTempPath(), name);
+    try
+    {
+        var owner = System.Security.Principal.WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Windows owner SID unavailable");
+        var store = new DurableMoveApprovalReplayStorePrototype(root);
+        store.Reserve("authorized-owner-operation");
+
+        WindowsCrossUserPipeProbe.AssertDifferentLocalUserCannotCreateReplayMarker(
+            root, owner, alternateUser, alternatePassword);
+
+        Require(!File.Exists(Path.Combine(root, "cross-user-injection.used")),
+            "other Windows user did not inject a fake approval marker");
+        OwnerOnlyReplayDirectoryPrototype.VerifyActualDirectoryAcl(root, owner);
+
+        // Rejected outsiders must not prevent the authorized owner from
+        // using the journal or reenable already-reserved operations.
+        store.Reserve("next-authorized-operation");
+        Equal(2, Directory.GetFiles(root, "*.used").Length,
+            "owner retains valid journal access after attack attempt");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
