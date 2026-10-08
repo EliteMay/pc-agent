@@ -1699,7 +1699,7 @@ Run("Manager pipe client blocks unauthenticated privileged requests before conne
     var deniedResponse = false;
     try
     {
-        _ = client.RespondApprovalAsync("op-private", "approved").GetAwaiter().GetResult();
+        _ = client.RespondApprovalAsync("op-private", "approved", new string('f', 32)).GetAwaiter().GetResult();
     }
     catch (InvalidOperationException)
     {
