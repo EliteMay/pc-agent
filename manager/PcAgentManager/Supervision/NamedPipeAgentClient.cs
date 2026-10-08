@@ -57,7 +57,8 @@ public sealed class NamedPipeAgentClient
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(decision);
-        if (approvalNonce.Length != 32 || !approvalNonce.All(Uri.IsHexDigit))
+        if (approvalNonce is null || approvalNonce.Length != 32
+            || !approvalNonce.All(Uri.IsHexDigit))
         {
             throw new InvalidOperationException(
                 "Approval response must match a valid pending UI challenge.");
