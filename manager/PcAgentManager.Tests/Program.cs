@@ -3087,13 +3087,13 @@ Run("Live WinForms move modal rejects a forged Yes result without a button click
                 issued, issued.AddSeconds(8));
 
             using var form = new LocalMoveConfirmationFormPrototype(challenge);
-            form.Shown += (_, _) => form.BeginInvoke(() =>
+            form.Shown += (_, _) => form.BeginInvoke(new Action(() =>
             {
                 // A malicious caller sets a Yes-shaped result directly
                 // without clicking the confirmation control.
                 form.DialogResult = DialogResult.Yes;
                 form.Close();
-            });
+            }));
 
             var result = form.ShowDialog();
             Equal(DialogResult.No, result,
