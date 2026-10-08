@@ -106,7 +106,9 @@ internal static class WindowsNoReplaceMovePrototype
         // The precommit callback is never used by the normal Agent.
         beforeNativeRename?.Invoke();
 
-        var length = checked(FilenameOffsetX64 + utf16Name.Length);
+        // FileNameLength excludes the trailing UTF-16 NUL. The Win32
+        // wrapper still needs a terminated string in the backing buffer.
+        var length = checked(FilenameOffsetX64 + utf16Name.Length + 2);
         var renameInfo = Marshal.AllocHGlobal(length);
 
         try
@@ -124,6 +126,9 @@ internal static class WindowsNoReplaceMovePrototype
                 0,
                 IntPtr.Add(renameInfo, FilenameOffsetX64),
                 utf16Name.Length);
+            Marshal.WriteInt16(
+                IntPtr.Add(renameInfo, FilenameOffsetX64 + utf16Name.Length),
+                0);
 
             if (!SetFileInformationByHandle(
                     sourceHandle,
