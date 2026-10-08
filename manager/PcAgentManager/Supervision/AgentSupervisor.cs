@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
+using System.Security.Cryptography;
 using System.Text.Json;
 using PcAgentManager.Configuration;
 using PcAgentManager.Models;
@@ -17,6 +18,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _pipeName;
 
+    private string? _localApprovalSecret;
     private Process? _process;
     private WindowsJobObject? _job;
     private CancellationTokenSource? _healthCts;
@@ -24,7 +26,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
     private bool _manualStopRequested;
     private bool _disposed;
     private int _recentCrashCount;
-    private string? _pendingApprovalOperationId;
+    private string? _pendingApprovalInstanceKey;
 
     public event EventHandler<ManagerSnapshot>? SnapshotChanged;
     public event Action<PendingApprovalSnapshot?>? PendingApprovalChanged;
@@ -41,9 +43,16 @@ public sealed class AgentSupervisor : IAsyncDisposable
         _configStore = configStore;
         _emergencyStopStore = emergencyStopStore;
         _logger = logger;
-        _pipeName = BuildPipeName();
+        // A fresh unpredictable pipe name per Manager instance makes
+        // pre-binding (pipe-name squatting) substantially harder. It is not
+        // a substitute for a Windows security descriptor or IPC auth.
+        _pipeName = BuildPrivatePipeName();
         Snapshot = ManagerSnapshot.Stopped(emergencyStopStore.IsEngaged);
     }
+
+    public static string BuildPrivatePipeName() =>
+        BuildPipeName() + "-" +
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     public static string BuildPipeName()
     {
@@ -138,6 +147,12 @@ public sealed class AgentSupervisor : IAsyncDisposable
             startInfo.Environment["PC_AGENT_JOURNAL_PATH"] = _paths.JournalPath;
             startInfo.Environment["PC_AGENT_PIPE_NAME"] = _pipeName;
             startInfo.Environment["PC_AGENT_VERSION"] = "0.11.0";
+            // Per-process credential to authenticate privileged local IPC.
+            // Never log or persist it. Rotated on every Agent restart.
+            var localApprovalSecret = Convert.ToHexString(
+                RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            startInfo.Environment["PC_AGENT_LOCAL_APPROVAL_SECRET"] =
+                localApprovalSecret;
 
             var process = new Process
             {
@@ -165,6 +180,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
                 throw;
             }
 
+            _localApprovalSecret = localApprovalSecret;
             _process = process;
             _job = job;
 
@@ -219,14 +235,24 @@ public sealed class AgentSupervisor : IAsyncDisposable
     public async Task<bool> RespondApprovalAsync(
         string operationId,
         bool approved,
+        string approvalNonce,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
-        var pipe = new NamedPipeAgentClient(_pipeName);
+        // Local human confirmation is still required by the UI. The secret
+        // additionally blocks arbitrary unauthenticated named-pipe clients.
+        var secret = _localApprovalSecret;
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            return false;
+        }
+
+        var pipe = new NamedPipeAgentClient(_pipeName, secret);
         var response = await pipe.RespondApprovalAsync(
             operationId,
             approved ? "approved" : "denied",
+            approvalNonce,
             cancellationToken);
 
         if (!response.Accepted)
@@ -309,7 +335,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
             try
             {
-                var pipe = new NamedPipeAgentClient(_pipeName);
+                var pipe = new NamedPipeAgentClient(_pipeName, _localApprovalSecret);
                 using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 await pipe.PrepareShutdownAsync(shutdownCts.Token);
             }
@@ -428,7 +454,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
     private async Task MonitorHealthAsync(Process process, CancellationToken cancellationToken)
     {
-        var pipe = new NamedPipeAgentClient(_pipeName);
+        var pipe = new NamedPipeAgentClient(_pipeName, _localApprovalSecret);
 
         while (!cancellationToken.IsCancellationRequested && !process.HasExited)
         {
@@ -504,23 +530,26 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
         _process?.Dispose();
         _process = null;
+        _localApprovalSecret = null;
 
         PublishPendingApproval(null);
     }
 
     private void PublishPendingApproval(PendingApprovalSnapshot? pending)
     {
-        var operationId = pending?.OperationId;
+        var operationKey = pending is null
+            ? null
+            : pending.OperationId + ":" + pending.ApprovalNonce;
 
         if (string.Equals(
-                _pendingApprovalOperationId,
-                operationId,
+                _pendingApprovalInstanceKey,
+                operationKey,
                 StringComparison.Ordinal))
         {
             return;
         }
 
-        _pendingApprovalOperationId = operationId;
+        _pendingApprovalInstanceKey = operationKey;
         PendingApprovalChanged?.Invoke(pending);
     }
 

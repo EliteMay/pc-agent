@@ -56,7 +56,7 @@ test("safe write tools require local confirmation", () => {
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ["create_directory", "edit_text_file", "write_text_file"]
+      ["copy_file", "create_directory", "edit_text_file", "write_text_file"]
     );
 
     for (const tool of tools) {
@@ -410,6 +410,21 @@ test("edit_text_file rejects stale hashes and invalid UTF-8", async () => {
       (error) =>
         error instanceof SafeWriteToolError
         && error.code === "INVALID_UTF8"
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// Safety regression: a queued move must never reach the old renameSync path.
+test("unsafe move_path stays unavailable in the runtime registry", () => {
+  const fixture = createFixture();
+
+  try {
+    assert.equal(fixture.registry.get("move_path"), undefined);
+    assert.throws(
+      () => fixture.registry.require("move_path"),
+      { code: "UNKNOWN_TOOL" }
     );
   } finally {
     fixture.cleanup();

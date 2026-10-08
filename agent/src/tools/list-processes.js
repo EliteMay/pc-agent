@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { Capabilities } from "../security/capabilities.js";
+import { minimalWindowsChildEnvironment } from "../security/child-process-env.js";
 import {
   ReadOnlyToolError,
   requireObjectArgs,
@@ -117,6 +118,7 @@ export function createListProcessesTool() {
           {
             shell: false,
             windowsHide: true,
+            env: minimalWindowsChildEnvironment(),
             timeout: 5000,
             maxBuffer: 4 * 1024 * 1024,
             encoding: "utf8"

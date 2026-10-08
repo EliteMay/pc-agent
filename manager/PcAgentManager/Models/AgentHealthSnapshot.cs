@@ -58,6 +58,9 @@ public sealed class PendingApprovalSnapshot
     [JsonPropertyName("operation_id")]
     public string OperationId { get; set; } = "";
 
+    [JsonPropertyName("approval_nonce")]
+    public string ApprovalNonce { get; set; } = "";
+
     [JsonPropertyName("tool")]
     public string Tool { get; set; } = "";
 

@@ -44,8 +44,38 @@ jobs:
       - name: Build Manager
         run: dotnet build manager/PcAgentManager/PcAgentManager.csproj -c Release --no-restore
 
-      - name: Manager regression tests
-        run: dotnet run --project manager/PcAgentManager.Tests/PcAgentManager.Tests.csproj -c Release --no-restore
+      - name: Manager regression tests (real cross-user Windows ACL gate)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # GitHub-hosted Windows runners are temporary VMs. Create a separate
+          # unprivileged Windows identity for a REAL kernel access check.
+          # Never use a user's existing account or store/log the password.
+          $account = 'paacl' + [guid]::NewGuid().ToString('N').Substring(0, 10)
+          $password = 'A!b1' + [guid]::NewGuid().ToString('N')
+          $created = $false
+          try {
+            $secure = ConvertTo-SecureString $password -AsPlainText -Force
+            New-LocalUser -Name $account -Password $secure -Description 'Temporary PC Agent pipe ACL regression probe' | Out-Null
+            $created = $true
+            $env:PC_AGENT_TEST_ALT_USER = $account
+            $env:PC_AGENT_TEST_ALT_PASSWORD = $password
+            $env:PC_AGENT_REQUIRE_ALT_USER_TEST = '1'
+
+            dotnet run --project manager/PcAgentManager.Tests/PcAgentManager.Tests.csproj -c Release --no-restore
+            if ($LASTEXITCODE -ne 0) {
+              throw "Manager regression tests failed (exit $LASTEXITCODE)"
+            }
+          } finally {
+            Remove-Item Env:PC_AGENT_TEST_ALT_USER -ErrorAction SilentlyContinue
+            Remove-Item Env:PC_AGENT_TEST_ALT_PASSWORD -ErrorAction SilentlyContinue
+            Remove-Item Env:PC_AGENT_REQUIRE_ALT_USER_TEST -ErrorAction SilentlyContinue
+            $password = $null
+            $secure = $null
+            if ($created) {
+              Remove-LocalUser -Name $account -ErrorAction Stop
+            }
+          }
 
       - name: Publish Manager
         run: dotnet publish manager/PcAgentManager/PcAgentManager.csproj -c Release --no-restore -o dist/manager

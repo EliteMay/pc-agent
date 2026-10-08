@@ -7,16 +7,20 @@ namespace PcAgentManager.Supervision;
 
 public sealed class NamedPipeAgentClient
 {
+    private const int MaxResponseCharacters = 16 * 1024;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
     private readonly string _pipeName;
+    private readonly string? _localApprovalSecret;
 
-    public NamedPipeAgentClient(string pipeName)
+    public NamedPipeAgentClient(string pipeName, string? localApprovalSecret = null)
     {
         _pipeName = pipeName;
+        _localApprovalSecret = localApprovalSecret;
     }
 
     public async Task<AgentHealthSnapshot> GetHealthAsync(
@@ -33,9 +37,10 @@ public sealed class NamedPipeAgentClient
     public async Task<PendingApprovalSnapshot?> GetPendingApprovalAsync(
         CancellationToken cancellationToken = default)
     {
+        RequireLocalAuthentication();
         var result = await SendAsync(
             "get_pending_approval",
-            parameters: null,
+            new { auth_token = _localApprovalSecret },
             cancellationToken);
 
         if (result.ValueKind == JsonValueKind.Null)
@@ -49,17 +54,27 @@ public sealed class NamedPipeAgentClient
     public async Task<ApprovalResponseSnapshot> RespondApprovalAsync(
         string operationId,
         string decision,
+        string approvalNonce,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(decision);
+        if (approvalNonce is null || approvalNonce.Length != 32
+            || !approvalNonce.All(Uri.IsHexDigit))
+        {
+            throw new InvalidOperationException(
+                "Approval response must match a valid pending UI challenge.");
+        }
+        RequireLocalAuthentication();
 
         var result = await SendAsync(
             "respond_approval",
             new
             {
                 operation_id = operationId,
-                decision
+                decision,
+                approval_nonce = approvalNonce,
+                auth_token = _localApprovalSecret
             },
             cancellationToken);
 
@@ -74,7 +89,60 @@ public sealed class NamedPipeAgentClient
     public async Task PrepareShutdownAsync(
         CancellationToken cancellationToken = default)
     {
-        _ = await SendAsync("prepare_shutdown", parameters: null, cancellationToken);
+        RequireLocalAuthentication();
+        _ = await SendAsync(
+            "prepare_shutdown",
+            new { auth_token = _localApprovalSecret },
+            cancellationToken);
+    }
+
+    private void RequireLocalAuthentication()
+    {
+        if (_localApprovalSecret is null
+            || _localApprovalSecret.Length != 64
+            || !_localApprovalSecret.All(Uri.IsHexDigit))
+        {
+            throw new InvalidOperationException(
+                "Authenticated Manager IPC credential is unavailable.");
+        }
+    }
+
+    private static async Task<string> ReadBoundedResponseAsync(
+        StreamReader reader,
+        CancellationToken cancellationToken)
+    {
+        // ReadLineAsync alone buffers an unbounded line from an unexpected
+        // local pipe server. Limit the reply before JSON parsing.
+        var characters = new char[1024];
+        var response = new StringBuilder();
+
+        while (true)
+        {
+            var read = await reader.ReadAsync(
+                characters.AsMemory(), cancellationToken);
+
+            if (read == 0)
+            {
+                throw new InvalidDataException(
+                    "Agent IPC ended without a complete reply frame.");
+            }
+
+            for (var index = 0; index < read; index++)
+            {
+                if (characters[index] == '\n')
+                {
+                    return response.ToString().TrimEnd('\r');
+                }
+
+                response.Append(characters[index]);
+
+                if (response.Length > MaxResponseCharacters)
+                {
+                    throw new InvalidDataException(
+                        "Agent IPC response exceeded the maximum allowed length.");
+                }
+            }
+        }
     }
 
     private async Task<JsonElement> SendAsync(
@@ -119,7 +187,7 @@ public sealed class NamedPipeAgentClient
             @params = parameters
         }));
 
-        var line = await reader.ReadLineAsync(timeout.Token);
+        var line = await ReadBoundedResponseAsync(reader, timeout.Token);
         if (string.IsNullOrWhiteSpace(line))
         {
             throw new InvalidDataException("Agent IPC returned an empty response.");
@@ -127,6 +195,17 @@ public sealed class NamedPipeAgentClient
 
         using var document = JsonDocument.Parse(line);
         var root = document.RootElement;
+
+        // A reply from a different outstanding request or an impersonating
+        // pipe server is never proof that our requested action completed.
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("id", out var returnedId)
+            || returnedId.ValueKind != JsonValueKind.String
+            || !string.Equals(returnedId.GetString(), id, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Agent IPC response ID does not match its request.");
+        }
 
         if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
         {

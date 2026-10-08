@@ -43,6 +43,7 @@ test("named pipe exposes pending approval and accepts local decision", {
   let approval = {
     command_id: "cmd-1",
     operation_id: "op-1",
+    approval_nonce: "f".repeat(32),
     tool: "write_text_file",
     risk: "medium",
     summary: {
@@ -54,22 +55,32 @@ test("named pipe exposes pending approval and accepts local decision", {
   };
 
   const decisions = [];
+  const approvalSecret = "a".repeat(64);
+  let shutdownRequests = 0;
 
   const server = createNamedPipeServer({
     pipeName,
+    approvalSecret,
+    onPrepareShutdown() {
+      shutdownRequests += 1;
+    },
     getHealth: () => ({
       version: "0.4.0",
       protocol_version: 1
     }),
     getPendingApproval: () => approval,
-    onApprovalResponse(operationId, decision) {
-      decisions.push({ operationId, decision });
+    onApprovalResponse(operationId, decision, approvalNonce) {
+      decisions.push({ operationId, decision, approvalNonce });
 
       if (operationId !== approval.operation_id) {
         return {
           accepted: false,
           code: "APPROVAL_OPERATION_MISMATCH"
         };
+      }
+
+      if (approvalNonce !== approval.approval_nonce) {
+        return { accepted: false, code: "APPROVAL_NONCE_MISMATCH" };
       }
 
       approval = null;
@@ -80,9 +91,17 @@ test("named pipe exposes pending approval and accepts local decision", {
   await server.listen();
 
   try {
-    const pending = await request(
+    const blockedPending = await request(
       pipeName,
       "get_pending_approval"
+    );
+    assert.equal(blockedPending.ok, false);
+    assert.equal(blockedPending.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+
+    const pending = await request(
+      pipeName,
+      "get_pending_approval",
+      { auth_token: approvalSecret }
     );
 
     assert.equal(pending.ok, true);
@@ -95,12 +114,54 @@ test("named pipe exposes pending approval and accepts local decision", {
       "D:\\AI\\test.txt"
     );
 
+    const withoutAuth = await request(
+      pipeName,
+      "respond_approval",
+      { operation_id: "op-1", decision: "approved" }
+    );
+    assert.equal(withoutAuth.ok, false);
+    assert.equal(withoutAuth.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    assert.equal(decisions.length, 0);
+
+    const incorrectAuth = await request(
+      pipeName,
+      "respond_approval",
+      { operation_id: "op-1", decision: "approved", auth_token: "b".repeat(64) }
+    );
+    assert.equal(incorrectAuth.ok, false);
+    assert.equal(incorrectAuth.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    assert.equal(decisions.length, 0);
+
+    const withoutShutdownAuth = await request(
+      pipeName,
+      "prepare_shutdown"
+    );
+    assert.equal(withoutShutdownAuth.ok, false);
+    assert.equal(withoutShutdownAuth.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    assert.equal(shutdownRequests, 0);
+
+    const staleChallenge = await request(
+      pipeName,
+      "respond_approval",
+      {
+        operation_id: "op-1",
+        decision: "approved",
+        approval_nonce: "0".repeat(32),
+        auth_token: approvalSecret
+      }
+    );
+    assert.equal(staleChallenge.ok, true);
+    assert.equal(staleChallenge.result.accepted, false);
+    assert.equal(staleChallenge.result.code, "APPROVAL_NONCE_MISMATCH");
+
     const response = await request(
       pipeName,
       "respond_approval",
       {
         operation_id: "op-1",
-        decision: "approved"
+        decision: "approved",
+        approval_nonce: approval.approval_nonce,
+        auth_token: approvalSecret
       }
     );
 
@@ -113,17 +174,164 @@ test("named pipe exposes pending approval and accepts local decision", {
       decisions,
       [{
         operationId: "op-1",
-        decision: "approved"
+        decision: "approved",
+        approvalNonce: "0".repeat(32)
+      }, {
+        operationId: "op-1",
+        decision: "approved",
+        approvalNonce: "f".repeat(32)
       }]
     );
 
     const cleared = await request(
       pipeName,
-      "get_pending_approval"
+      "get_pending_approval",
+      { auth_token: approvalSecret }
     );
 
     assert.equal(cleared.ok, true);
     assert.equal(cleared.result, null);
+
+    const authorizedStop = await request(
+      pipeName,
+      "prepare_shutdown",
+      { auth_token: approvalSecret }
+    );
+    assert.equal(authorizedStop.ok, true);
+    assert.equal(shutdownRequests, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+
+test("privileged IPC fails closed when no Manager launch credential was configured", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const pipeName = "PcAgent-NoApprovalSecret-" + randomUUID();
+  let responses = 0;
+  let shutdowns = 0;
+  const server = createNamedPipeServer({
+    pipeName,
+    getHealth: () => ({ version: "0.11.0", protocol_version: 1 }),
+    getPendingApproval: () => ({ operation_id: "op-private" }),
+    onApprovalResponse() {
+      responses += 1;
+      return { accepted: true };
+    },
+    onPrepareShutdown() {
+      shutdowns += 1;
+    }
+  });
+
+  await server.listen();
+  try {
+    for (const method of [
+      "get_pending_approval",
+      "respond_approval",
+      "prepare_shutdown"
+    ]) {
+      const result = await request(pipeName, method, {
+        auth_token: "a".repeat(64),
+        operation_id: "op-private",
+        decision: "approved"
+      });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    }
+
+    assert.equal(responses, 0);
+    assert.equal(shutdowns, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+
+test("named pipe handles only the first request per connection", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const pipeName = "PcAgent-OneRequest-" + randomUUID();
+  const approvalSecret = "d".repeat(64);
+  let approvals = 0;
+  let shutdowns = 0;
+  const server = createNamedPipeServer({
+    pipeName,
+    approvalSecret,
+    getHealth: () => ({ version: "test", protocol_version: 1 }),
+    onApprovalResponse() {
+      approvals += 1;
+      return { accepted: true };
+    },
+    onPrepareShutdown() {
+      shutdowns += 1;
+    }
+  });
+
+  await server.listen();
+  try {
+    const responses = await new Promise((resolve, reject) => {
+      const socket = net.createConnection("\\\\.\\pipe\\" + pipeName);
+      let received = "";
+      socket.setEncoding("utf8");
+      socket.once("error", reject);
+      socket.on("data", chunk => { received += chunk; });
+      socket.once("end", () => resolve(received));
+      socket.once("connect", () => {
+        const authorized = (method, params) => JSON.stringify({
+          id: method,
+          method,
+          params: { auth_token: approvalSecret, ...params }
+        }) + "\n";
+        socket.write(
+          authorized("respond_approval", {
+            operation_id: "op-one",
+            decision: "approved",
+            approval_nonce: "a".repeat(32)
+          })
+          + authorized("prepare_shutdown", {})
+        );
+      });
+    });
+
+    const lines = responses.trim().split("\n");
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]).ok, true);
+    assert.equal(approvals, 1);
+    assert.equal(shutdowns, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test("named pipe closes inactive connections without executing callbacks", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const pipeName = "PcAgent-Idle-" + randomUUID();
+  let responses = 0;
+  const server = createNamedPipeServer({
+    pipeName,
+    approvalSecret: "e".repeat(64),
+    getHealth: () => ({ version: "test", protocol_version: 1 }),
+    onApprovalResponse() {
+      responses += 1;
+      return { accepted: true };
+    }
+  });
+
+  await server.listen();
+  try {
+    const result = await Promise.race([
+      new Promise((resolve, reject) => {
+        const socket = net.createConnection("\\\\.\\pipe\\" + pipeName);
+        socket.once("error", reject);
+        socket.once("close", () => resolve("closed"));
+      }),
+      new Promise(resolve => setTimeout(() => resolve("timeout"), 8000))
+    ]);
+    assert.equal(result, "closed");
+    assert.equal(responses, 0);
   } finally {
     await server.close();
   }

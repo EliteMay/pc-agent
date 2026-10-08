@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 export class ApprovalBrokerError extends Error {
   constructor(message, code = "APPROVAL_BROKER_ERROR") {
     super(message);
@@ -65,19 +67,27 @@ export class LocalApprovalBroker {
         summary: Object.freeze({ ...(request.summary ?? {}) }),
         requested_at: new Date().toISOString(),
         expires_at: request.expires_at,
+        // New random challenge for every local approval dialog instance.
+        // Matching only operation_id is insufficient for a stale UI response.
+        approval_nonce: randomBytes(16).toString("hex"),
         resolve,
         timer
       };
     });
   }
 
-  respond(operationId, decision) {
+  respond(operationId, decision, approvalNonce) {
     if (!this.#pending) {
       return { accepted: false, code: "NO_PENDING_APPROVAL" };
     }
 
     if (this.#pending.operation_id !== operationId) {
       return { accepted: false, code: "APPROVAL_OPERATION_MISMATCH" };
+    }
+
+    if (typeof approvalNonce !== "string"
+        || approvalNonce !== this.#pending.approval_nonce) {
+      return { accepted: false, code: "APPROVAL_NONCE_MISMATCH" };
     }
 
     if (decision !== "approved" && decision !== "denied") {

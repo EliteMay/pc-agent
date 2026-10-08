@@ -34,6 +34,21 @@ internal static class Program
             return;
         }
 
+        // Explicit local-only UI experiment. Both commands contain fake
+        // paths and cannot issue a move approval, connect to the Agent, or
+        // write replay journals. The unattended smoke mode auto-denies.
+        if (args.Contains("--native-move-preview-smoke", StringComparer.OrdinalIgnoreCase))
+        {
+            Environment.ExitCode = LocalMoveDialogPreviewRunner.Run(autoDeny: true);
+            return;
+        }
+
+        if (args.Contains("--native-move-preview", StringComparer.OrdinalIgnoreCase))
+        {
+            Environment.ExitCode = LocalMoveDialogPreviewRunner.Run(autoDeny: false);
+            return;
+        }
+
         if (TryGetOption(args, "--update-bootstrap", out var statePath))
         {
             if (!TryGetIntOption(args, "--parent-pid", out var parentPid))
@@ -105,12 +120,48 @@ internal static class Program
             desktopCommander,
             background);
 
+        ManagerProtectedPipeHost? protectedStatusPipe = null;
+
         try
         {
+            try
+            {
+                // This is a separate, owner-only, READ-ONLY Manager endpoint.
+                // It exposes PING 1 only. The existing Agent approval channel
+                // is unchanged and no native file move RPC is registered.
+                protectedStatusPipe = ManagerProtectedPipeHost.Start();
+                logger.Write("info",
+                    "Manager owner-only status pipe active (read-only PING only).");
+            }
+            catch (Exception ex)
+            {
+                // The optional status-only boundary fails closed: no pipe is
+                // exposed on error. Do not weaken its DACL or fall back to
+                // Node's existing pipe to emulate this feature.
+                logger.Write("warn",
+                    "Owner-only status pipe unavailable; disabled ("
+                    + ex.GetType().Name + ").");
+            }
+
             Application.Run(form);
         }
         finally
         {
+            if (protectedStatusPipe is not null)
+            {
+                try
+                {
+                    protectedStatusPipe.DisposeAsync()
+                        .AsTask().GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    logger.Write("warn",
+                        "Owner-only status pipe stop failed ("
+                        + ex.GetType().Name + ").");
+                }
+            }
+
             supervisor.DisposeAsync()
                 .AsTask()
                 .GetAwaiter()
