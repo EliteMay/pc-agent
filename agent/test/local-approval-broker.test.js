@@ -62,3 +62,40 @@ test("approval broker rejects mismatched responses and supports denial", async (
 
   assert.equal(await waiting, "denied");
 });
+
+
+test("old approval challenge never approves a later dialog reusing an operation ID", async () => {
+  const broker = new LocalApprovalBroker({ maxWaitMs: 5000 });
+  const request = {
+    command_id: "cmd-dialog",
+    operation_id: "op-reused",
+    tool: "mutation_probe",
+    risk: "medium",
+    summary: { path: "D:\\\\AI\\\\approved.txt" },
+    expires_at: new Date(Date.now() + 5000).toISOString()
+  };
+
+  const firstWaiting = broker.requestApproval(request);
+  const first = broker.getPendingApproval();
+  assert.deepEqual(
+    broker.respond(request.operation_id, "denied", first.approval_nonce),
+    { accepted: true }
+  );
+  assert.equal(await firstWaiting, "denied");
+
+  const secondWaiting = broker.requestApproval(request);
+  const second = broker.getPendingApproval();
+  assert.notEqual(second.approval_nonce, first.approval_nonce);
+
+  assert.deepEqual(
+    broker.respond(request.operation_id, "approved", first.approval_nonce),
+    { accepted: false, code: "APPROVAL_NONCE_MISMATCH" }
+  );
+  assert.equal(broker.getPendingApproval().approval_nonce, second.approval_nonce);
+
+  assert.deepEqual(
+    broker.respond(request.operation_id, "approved", second.approval_nonce),
+    { accepted: true }
+  );
+  assert.equal(await secondWaiting, "approved");
+});
