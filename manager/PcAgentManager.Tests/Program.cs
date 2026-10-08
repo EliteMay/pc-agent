@@ -2706,6 +2706,274 @@ Run("Real different Windows user cannot inject a durable replay marker", () =>
     }
 });
 
+
+Run("Local move dialog consent binds displayed details to a single native move", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var basePath = Path.Combine(
+        Path.GetTempPath(), "PcAgentLocalDialogTests", Guid.NewGuid().ToString("N"));
+    var allowed = Path.Combine(basePath, "allowed");
+    Directory.CreateDirectory(allowed);
+    try
+    {
+        var journal = OwnerOnlyReplayDirectoryPrototype.CreateNewTestDirectory(
+            basePath, "PcAgentReplayAclTest-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(allowed, "source.txt");
+        var destination = Path.Combine(allowed, "destination.txt");
+        File.WriteAllText(source, "must move once only");
+        var now = DateTimeOffset.Parse("2026-10-08T07:00:00Z");
+
+        using var signer = new LocalMoveApprovalTicketPrototype(
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(32),
+            new DurableMoveApprovalReplayStorePrototype(
+                journal, requireOwnerOnlyDirectoryForTest: true));
+        var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+        var gate = new LocalMoveDialogConsentPrototype(workflow);
+        var proposal = workflow.ProposeForTest(
+            "cmd-dialog-one", "device-dialog", "op-dialog-one",
+            source, destination, allowed);
+        var displayed = gate.OpenForTest(proposal, now);
+
+        Equal("op-dialog-one", displayed.OperationId, "displayed operation identity");
+        Equal(proposal.Request.SourcePath, displayed.SourcePath, "displayed source");
+        Equal(proposal.Request.DestinationPath, displayed.DestinationPath, "displayed destination");
+        Equal(proposal.Request.SourceSha256, displayed.SourceSha256, "displayed source fingerprint");
+        Equal(32, displayed.ChallengeNonce.Length, "unique 128-bit dialog nonce");
+        Require(!File.Exists(destination), "displaying a dialog must not mutate any file");
+        Equal(0, Directory.GetFiles(journal, "*.used").Length,
+            "displaying a dialog must not consume an operation");
+
+        var confirmed = gate.ResolveLocalDialogForTest(
+            displayed, DialogResult.Yes, now.AddSeconds(1));
+        workflow.ExecuteForTest(confirmed, now.AddSeconds(2));
+
+        Require(!File.Exists(source), "the locally confirmed source was moved");
+        Equal("must move once only", File.ReadAllText(destination),
+            "the exact approved bytes were preserved");
+        Equal(1, Directory.GetFiles(journal, "*.used").Length,
+            "a one-use operation was reserved before the native move");
+
+        var replayDenied = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                displayed, DialogResult.Yes, now.AddSeconds(3));
+        }
+        catch (InvalidOperationException)
+        {
+            replayDenied = true;
+        }
+        Require(replayDenied, "the same local dialog cannot approve twice");
+
+        var executionReplayDenied = false;
+        try
+        {
+            workflow.ExecuteForTest(confirmed, now.AddSeconds(4));
+        }
+        catch (InvalidOperationException)
+        {
+            executionReplayDenied = true;
+        }
+        Require(executionReplayDenied,
+            "the same signed and durably reserved native move cannot execute twice");
+    }
+    finally
+    {
+        Directory.Delete(basePath, recursive: true);
+    }
+});
+
+Run("Local move dialog refusal, closing and copied challenges never grant permission", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var basePath = Path.Combine(
+        Path.GetTempPath(), "PcAgentLocalDialogTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(basePath);
+    try
+    {
+        var source = Path.Combine(basePath, "source.txt");
+        var destination = Path.Combine(basePath, "destination.txt");
+        File.WriteAllText(source, "unchanged");
+        var now = DateTimeOffset.Parse("2026-10-08T07:00:00Z");
+
+        using var signer = new LocalMoveApprovalTicketPrototype(
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+        var gate = new LocalMoveDialogConsentPrototype(workflow);
+        var proposal = workflow.ProposeForTest(
+            "cmd-dialog-refuse", "device-dialog", "op-dialog-refuse",
+            source, destination, basePath);
+
+        var first = gate.OpenForTest(proposal, now);
+        var copiedChallengeRejected = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                first with { }, DialogResult.Yes, now.AddSeconds(1));
+        }
+        catch (InvalidOperationException)
+        {
+            copiedChallengeRejected = true;
+        }
+        Require(copiedChallengeRejected,
+            "a newly constructed challenge with identical values has no local UI capability");
+
+        var denied = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                first, DialogResult.No, now.AddSeconds(2));
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+        Require(denied, "local denial must not mint any signed ticket");
+
+        var second = gate.OpenForTest(proposal, now.AddSeconds(3));
+        Require(first.ChallengeNonce != second.ChallengeNonce,
+            "new dialog even for same operation must generate fresh randomness");
+
+        var staleRejected = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                first, DialogResult.Yes, now.AddSeconds(4));
+        }
+        catch (InvalidOperationException)
+        {
+            staleRejected = true;
+        }
+        Require(staleRejected, "previous dialog must not approve a later instance");
+
+        var closed = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                second, DialogResult.Cancel, now.AddSeconds(5));
+        }
+        catch (InvalidOperationException)
+        {
+            closed = true;
+        }
+        Require(closed, "closing the dialog must fail closed");
+
+        var third = gate.OpenForTest(proposal, now.AddSeconds(6));
+        var implicitOkDenied = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                third, DialogResult.OK, now.AddSeconds(7));
+        }
+        catch (InvalidOperationException)
+        {
+            implicitOkDenied = true;
+        }
+        Require(implicitOkDenied,
+            "only a distinct explicit Yes result may be accepted by future real UI code");
+
+        Equal("unchanged", File.ReadAllText(source),
+            "denied/stale/copied dialogs must never move the source");
+        Require(!File.Exists(destination),
+            "no denied or closed confirmation can create the destination");
+    }
+    finally
+    {
+        Directory.Delete(basePath, recursive: true);
+    }
+});
+
+Run("Local move dialog prevents overlapping, expired and time-reversed approvals", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var basePath = Path.Combine(
+        Path.GetTempPath(), "PcAgentLocalDialogTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(basePath);
+    try
+    {
+        var source = Path.Combine(basePath, "source.txt");
+        var destination = Path.Combine(basePath, "destination.txt");
+        File.WriteAllText(source, "unchanged");
+        var now = DateTimeOffset.Parse("2026-10-08T07:00:00Z");
+
+        using var signer = new LocalMoveApprovalTicketPrototype(
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        var workflow = new LocalApprovedNativeMoveWorkflowPrototype(signer);
+        var gate = new LocalMoveDialogConsentPrototype(workflow);
+        var proposal = workflow.ProposeForTest(
+            "cmd-dialog-expiry", "device-dialog", "op-dialog-expiry",
+            source, destination, basePath);
+
+        var initial = gate.OpenForTest(proposal, now);
+        var overlappingDenied = false;
+        try
+        {
+            _ = gate.OpenForTest(proposal, now.AddSeconds(1));
+        }
+        catch (InvalidOperationException)
+        {
+            overlappingDenied = true;
+        }
+        Require(overlappingDenied,
+            "a pending approval cannot silently be replaced by a second dialog");
+
+        var expiredDenied = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                initial, DialogResult.Yes, now.AddSeconds(31));
+        }
+        catch (InvalidOperationException)
+        {
+            expiredDenied = true;
+        }
+        Require(expiredDenied, "a user reply after the 30-second expiry is rejected");
+
+        var newInstance = gate.OpenForTest(proposal, now.AddSeconds(32));
+        var staleDenied = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                initial, DialogResult.Yes, now.AddSeconds(33));
+        }
+        catch (InvalidOperationException)
+        {
+            staleDenied = true;
+        }
+        Require(staleDenied, "an expired dialog cannot authorize a new instance");
+
+        var reversedDenied = false;
+        try
+        {
+            _ = gate.ResolveLocalDialogForTest(
+                newInstance, DialogResult.Yes, now.AddSeconds(30));
+        }
+        catch (InvalidOperationException)
+        {
+            reversedDenied = true;
+        }
+        Require(reversedDenied,
+            "clock rollback must not make a dialog valid before it was issued");
+
+        var fresh = gate.OpenForTest(proposal, now.AddSeconds(34));
+        var confirmed = gate.ResolveLocalDialogForTest(
+            fresh, DialogResult.Yes, now.AddSeconds(35));
+        Require(confirmed.Ticket.PayloadUtf8.Length > 0,
+            "a fresh single local test decision can issue a signed request");
+        Require(!File.Exists(destination),
+            "issuing a ticket alone must never execute the native move");
+        Equal("unchanged", File.ReadAllText(source),
+            "source remains unchanged without the separate execution step");
+    }
+    finally
+    {
+        Directory.Delete(basePath, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
