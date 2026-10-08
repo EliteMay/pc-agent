@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -170,11 +170,11 @@ test("open is only allowed for an existing small .txt file inside allowed roots"
     });
     const summary = tool.approvalSummary({ action: "open", path: filename });
     assert.equal(summary.operation, "open");
-    assert.equal(summary.path.toLowerCase(), filename.toLowerCase());
+    assert.equal(summary.path.toLowerCase(), realpathSync.native(filename).toLowerCase());
     await tool.execute({ action: "open", path: filename });
     assert.equal(invocations.length, 1);
     const passed = JSON.parse(Buffer.from(invocations[0], "base64").toString("utf8"));
-    assert.equal(passed.path.toLowerCase(), filename.toLowerCase());
+    assert.equal(passed.path.toLowerCase(), realpathSync.native(filename).toLowerCase());
     await assert.rejects(
       tool.execute({ action: "open", path: outside }),
       (error) => error.code === "PATH_NOT_FOUND" || error.code === "PATH_OUTSIDE_ALLOWED_ROOTS"
