@@ -63,7 +63,8 @@ export async function runAgentHost(config) {
     getPendingApproval: () => approvalBroker.getPendingApproval(),
     onApprovalResponse: (operationId, decision) =>
       approvalBroker.respond(operationId, decision),
-    onPrepareShutdown: requestStop
+    onPrepareShutdown: requestStop,
+    approvalSecret: config.localApprovalSecret
   });
 
   await pipe.listen();
