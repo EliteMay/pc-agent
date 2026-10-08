@@ -1536,6 +1536,157 @@ Run("Local move ticket rejects oversized or malformed ticket data", () =>
     service.ConsumeForTest(issued, request, now);
 });
 
+
+Run("Durable approval ticket replay stays blocked after Manager restart", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentReplayStoreTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+        var key = Enumerable.Repeat((byte)0x45, 32).ToArray();
+        var request = new LocalMoveApprovalTicketPrototype.MoveRequest(
+            "cmd-restart", "device-restart", "operation-restart",
+            @"D:\AI\source.txt", @"D:\AI\target.txt", @"D:\AI", new string('f', 64));
+
+        // First Manager instance accepts the exact local approval once.
+        var store = new DurableMoveApprovalReplayStorePrototype(root);
+        using (var first = new LocalMoveApprovalTicketPrototype(key, store))
+        {
+            var ticket = first.IssueApprovedForTest(request, now);
+            first.ConsumeForTest(ticket, request, now.AddSeconds(1));
+        }
+
+        // New Manager instance has an empty in-memory cache, but the marker
+        // must reject both the original ticket and a freshly minted nonce.
+        using (var reopened = new LocalMoveApprovalTicketPrototype(
+            key, new DurableMoveApprovalReplayStorePrototype(root)))
+        {
+            var replay = reopened.IssueApprovedForTest(request, now.AddSeconds(2));
+            var denied = false;
+            try
+            {
+                reopened.ConsumeForTest(replay, request, now.AddSeconds(3));
+            }
+            catch (InvalidOperationException)
+            {
+                denied = true;
+            }
+            Require(denied, "restarted Manager must not forget consumed operation");
+
+            // A different operation ID still works in the same store.
+            var next = request with { OperationId = "operation-new" };
+            var nextTicket = reopened.IssueApprovedForTest(next, now.AddSeconds(4));
+            reopened.ConsumeForTest(nextTicket, next, now.AddSeconds(5));
+        }
+
+        Equal(2, Directory.EnumerateFiles(root, "*.used").Count(),
+            "both authorized reservations remain durable");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Durable approval replay reservation is atomic across independent instances", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentReplayStoreTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var success = 0;
+        var rejected = 0;
+        Parallel.For(0, 8, _ =>
+        {
+            var independent = new DurableMoveApprovalReplayStorePrototype(root);
+            try
+            {
+                independent.Reserve("one-concurrent-operation");
+                Interlocked.Increment(ref success);
+            }
+            catch (InvalidOperationException)
+            {
+                Interlocked.Increment(ref rejected);
+            }
+        });
+
+        Equal(1, success, "exactly one independent process-style claimant reserves");
+        Equal(7, rejected, "all competing claimants are denied");
+        Equal(1, Directory.EnumerateFiles(root, "*.used").Count(),
+            "only one operation marker is persisted");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Uncertain outcome keeps a durable replay marker permanently", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentReplayStoreTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var beforeCrash = new DurableMoveApprovalReplayStorePrototype(root);
+        beforeCrash.Reserve("reserved-but-never-executed");
+
+        // Simulates a power loss / process crash after authorization but
+        // before the move. The existing marker must NOT be erased.
+        var afterCrash = new DurableMoveApprovalReplayStorePrototype(root);
+        var denied = false;
+        try
+        {
+            afterCrash.Reserve("reserved-but-never-executed");
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+        Require(denied, "uncertain outcome must fail closed across restart");
+        Equal(1, Directory.EnumerateFiles(root, "*.used").Count(),
+            "reservation retained after simulated crash");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("Durable replay store fails closed when its directory is invalid", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentReplayStoreTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var journalRoot = Path.Combine(root, "approvals");
+        var store = new DurableMoveApprovalReplayStorePrototype(journalRoot);
+
+        // Lose the trusted storage directory before reserving. No fallback
+        // to an in-memory cache or an alternative location is permitted.
+        Directory.Delete(journalRoot, recursive: true);
+        File.WriteAllText(journalRoot, "not a trusted directory");
+
+        var denied = false;
+        try
+        {
+            store.Reserve("must-not-execute");
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+        Require(denied, "tampered durable replay location must deny execution");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
