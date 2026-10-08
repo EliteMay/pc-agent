@@ -13,8 +13,19 @@ namespace PcAgentManager.Services;
 internal static class OwnerOnlyNamedPipePrototype
 {
     private const string TestPipePrefix = "PcAgentAclTest-";
+    private const string ManagerPipePrefix = "PcAgentMgrSafe-";
 
-    internal static NamedPipeServerStream CreateForCurrentUser(string pipeName)
+    internal static NamedPipeServerStream CreateForCurrentUser(string pipeName) =>
+        CreateVerifiedPipe(pipeName, TestPipePrefix);
+
+    // A separate, read-only Manager-owned endpoint. Never accept file
+    // mutations or approval decisions via this listener.
+    internal static NamedPipeServerStream CreateManagerStatusPipe(string pipeName) =>
+        CreateVerifiedPipe(pipeName, ManagerPipePrefix);
+
+    private static NamedPipeServerStream CreateVerifiedPipe(
+        string pipeName,
+        string requiredPrefix)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -25,12 +36,12 @@ internal static class OwnerOnlyNamedPipePrototype
         // Restrict this proof-of-concept entry point to disposable test names.
         // There is deliberately no production listener or command dispatcher.
         if (string.IsNullOrEmpty(pipeName)
-            || !pipeName.StartsWith(TestPipePrefix, StringComparison.Ordinal)
-            || pipeName.Length != TestPipePrefix.Length + 32
-            || !pipeName[TestPipePrefix.Length..].All(Uri.IsHexDigit))
+            || !pipeName.StartsWith(requiredPrefix, StringComparison.Ordinal)
+            || pipeName.Length != requiredPrefix.Length + 32
+            || !pipeName[requiredPrefix.Length..].All(Uri.IsHexDigit))
         {
             throw new ArgumentException(
-                "Only unique PcAgentAclTest-<128-bit-hex> names are permitted.",
+                "Only the fixed test or Manager status pipe prefix with a 128-bit hex nonce is permitted.",
                 nameof(pipeName));
         }
 
