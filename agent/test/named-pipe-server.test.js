@@ -43,6 +43,7 @@ test("named pipe exposes pending approval and accepts local decision", {
   let approval = {
     command_id: "cmd-1",
     operation_id: "op-1",
+    approval_nonce: "f".repeat(32),
     tool: "write_text_file",
     risk: "medium",
     summary: {
@@ -68,14 +69,18 @@ test("named pipe exposes pending approval and accepts local decision", {
       protocol_version: 1
     }),
     getPendingApproval: () => approval,
-    onApprovalResponse(operationId, decision) {
-      decisions.push({ operationId, decision });
+    onApprovalResponse(operationId, decision, approvalNonce) {
+      decisions.push({ operationId, decision, approvalNonce });
 
       if (operationId !== approval.operation_id) {
         return {
           accepted: false,
           code: "APPROVAL_OPERATION_MISMATCH"
         };
+      }
+
+      if (approvalNonce !== approval.approval_nonce) {
+        return { accepted: false, code: "APPROVAL_NONCE_MISMATCH" };
       }
 
       approval = null;
@@ -135,12 +140,27 @@ test("named pipe exposes pending approval and accepts local decision", {
     assert.equal(withoutShutdownAuth.error.code, "LOCAL_IPC_AUTH_REQUIRED");
     assert.equal(shutdownRequests, 0);
 
+    const staleChallenge = await request(
+      pipeName,
+      "respond_approval",
+      {
+        operation_id: "op-1",
+        decision: "approved",
+        approval_nonce: "0".repeat(32),
+        auth_token: approvalSecret
+      }
+    );
+    assert.equal(staleChallenge.ok, true);
+    assert.equal(staleChallenge.result.accepted, false);
+    assert.equal(staleChallenge.result.code, "APPROVAL_NONCE_MISMATCH");
+
     const response = await request(
       pipeName,
       "respond_approval",
       {
         operation_id: "op-1",
         decision: "approved",
+        approval_nonce: approval.approval_nonce,
         auth_token: approvalSecret
       }
     );
@@ -154,7 +174,12 @@ test("named pipe exposes pending approval and accepts local decision", {
       decisions,
       [{
         operationId: "op-1",
-        decision: "approved"
+        decision: "approved",
+        approvalNonce: "0".repeat(32)
+      }, {
+        operationId: "op-1",
+        decision: "approved",
+        approvalNonce: "f".repeat(32)
       }]
     );
 
