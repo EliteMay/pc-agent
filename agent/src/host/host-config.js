@@ -50,7 +50,15 @@ export function loadHostConfiguration(env = process.env) {
   const deviceToken = required(env, "PC_AGENT_DEVICE_TOKEN");
   const journalPath = required(env, "PC_AGENT_JOURNAL_PATH");
   const pipeName = required(env, "PC_AGENT_PIPE_NAME");
+  const localApprovalSecret = required(env, "PC_AGENT_LOCAL_APPROVAL_SECRET");
   const allowedRoots = parseAllowedRoots(required(env, "PC_AGENT_ALLOWED_ROOTS_JSON"));
+
+  if (!/^[a-f0-9]{64}$/i.test(localApprovalSecret)) {
+    throw new HostConfigurationError(
+      "PC_AGENT_LOCAL_APPROVAL_SECRET must be a 32-byte hex key.",
+      "INVALID_LOCAL_APPROVAL_SECRET"
+    );
+  }
 
   let endpoint;
   try {
@@ -75,6 +83,7 @@ export function loadHostConfiguration(env = process.env) {
     deviceToken,
     journalPath,
     pipeName,
+    localApprovalSecret,
     allowedRoots,
     version: env.PC_AGENT_VERSION?.trim() || "0.3.0"
   });
