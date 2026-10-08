@@ -102,6 +102,12 @@ test("GUI tool invokes a fixed PowerShell script, with bounded sanitized environ
     const ps = Buffer.from(argv[4], "base64").toString("utf16le");
     assert.match(ps, /PcAgentNotepadInput/);
     assert.match(ps, /RequireFocused/);
+    // A hidden PowerShell child has STARTF_USESHOWWINDOW=SW_HIDE.
+    // ShowWindow's first invocation may hide Notepad instead of showing it.
+    assert.doesNotMatch(ps, /\bShowWindow\s*\(/);
+    assert.match(ps, /-WindowStyle Normal/);
+    assert.match(ps, /IsWindowVisible\(hwnd\)/);
+    assert.match(ps, /RequireFocused\(\$target\)/);
     assert.match(ps, /Assert-NoProtectedGame/);
     assert.equal(options.shell, false);
     assert.equal(options.timeout, 20_000);
