@@ -54,9 +54,15 @@ test("named pipe exposes pending approval and accepts local decision", {
   };
 
   const decisions = [];
+  const approvalSecret = "a".repeat(64);
+  let shutdownRequests = 0;
 
   const server = createNamedPipeServer({
     pipeName,
+    approvalSecret,
+    onPrepareShutdown() {
+      shutdownRequests += 1;
+    },
     getHealth: () => ({
       version: "0.4.0",
       protocol_version: 1
@@ -95,12 +101,39 @@ test("named pipe exposes pending approval and accepts local decision", {
       "D:\\AI\\test.txt"
     );
 
+    const withoutAuth = await request(
+      pipeName,
+      "respond_approval",
+      { operation_id: "op-1", decision: "approved" }
+    );
+    assert.equal(withoutAuth.ok, false);
+    assert.equal(withoutAuth.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    assert.equal(decisions.length, 0);
+
+    const incorrectAuth = await request(
+      pipeName,
+      "respond_approval",
+      { operation_id: "op-1", decision: "approved", auth_token: "b".repeat(64) }
+    );
+    assert.equal(incorrectAuth.ok, false);
+    assert.equal(incorrectAuth.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    assert.equal(decisions.length, 0);
+
+    const withoutShutdownAuth = await request(
+      pipeName,
+      "prepare_shutdown"
+    );
+    assert.equal(withoutShutdownAuth.ok, false);
+    assert.equal(withoutShutdownAuth.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    assert.equal(shutdownRequests, 0);
+
     const response = await request(
       pipeName,
       "respond_approval",
       {
         operation_id: "op-1",
-        decision: "approved"
+        decision: "approved",
+        auth_token: approvalSecret
       }
     );
 
@@ -124,6 +157,14 @@ test("named pipe exposes pending approval and accepts local decision", {
 
     assert.equal(cleared.ok, true);
     assert.equal(cleared.result, null);
+
+    const authorizedStop = await request(
+      pipeName,
+      "prepare_shutdown",
+      { auth_token: approvalSecret }
+    );
+    assert.equal(authorizedStop.ok, true);
+    assert.equal(shutdownRequests, 1);
   } finally {
     await server.close();
   }
