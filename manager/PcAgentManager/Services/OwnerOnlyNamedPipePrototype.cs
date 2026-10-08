@@ -5,10 +5,11 @@ using System.Security.Principal;
 namespace PcAgentManager.Services;
 
 /// <summary>
-/// ISOLATED SECURITY RESEARCH ONLY: demonstrates a pipe created with an
-/// explicit, non-inherited Windows DACL. Not used by the Agent or Manager UI.
-/// The production Node IPC remains separate and must not be described as
-/// owner-only until it actually uses an audited native server boundary.
+/// Shared Windows DACL factory for disposable ACL regression fixtures and
+/// the Manager's read-only status endpoint. The latter accepts PING 1 only;
+/// this factory does NOT authorize or expose filesystem mutations.
+/// The Node Agent's separate approval IPC remains unchanged and must not
+/// be described as owner-only based on this Manager-specific pipe.
 /// </summary>
 internal static class OwnerOnlyNamedPipePrototype
 {
@@ -33,8 +34,9 @@ internal static class OwnerOnlyNamedPipePrototype
                 "An owner-only named pipe requires Windows security descriptors.");
         }
 
-        // Restrict this proof-of-concept entry point to disposable test names.
-        // There is deliberately no production listener or command dispatcher.
+        // Permit only two fixed name namespaces: disposable tests and
+        // Manager-owned status-only IPC. No arbitrary pipe names and no
+        // approval/native move message dispatcher are accepted here.
         if (string.IsNullOrEmpty(pipeName)
             || !pipeName.StartsWith(requiredPrefix, StringComparison.Ordinal)
             || pipeName.Length != requiredPrefix.Length + 32
