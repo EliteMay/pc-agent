@@ -2975,6 +2975,93 @@ Run("Local move dialog prevents overlapping, expired and time-reversed approvals
     }
 });
 
+
+Run("Real Windows move confirmation form renders exact fields and defaults to denial", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var issued = DateTimeOffset.UtcNow;
+            var challenge = new LocalMoveDialogConsentPrototype.DialogChallenge(
+                new string('e', 32),
+                "command-ui-preview",
+                "device-ui-preview",
+                "operation-ui-preview",
+                @"D:\\Allowed\\source.txt",
+                @"D:\\Allowed\\destination.txt",
+                @"D:\\Allowed",
+                new string('a', 64),
+                issued,
+                issued.AddSeconds(30));
+
+            using var form = new LocalMoveConfirmationFormPrototype(challenge);
+            Require(!form.IsApprovalEnabledForTest,
+                "native file mutation approval must be disabled by default");
+            Require(form.AcceptButton is null,
+                "pressing Enter alone must never grant a native move");
+            Require(form.CancelButton is not null,
+                "Escape must have an explicit denial control");
+
+            // Traverse form contents without opening a window in headless CI.
+            static IEnumerable<Control> Visit(Control control)
+            {
+                foreach (Control child in control.Controls)
+                {
+                    yield return child;
+                    foreach (var nested in Visit(child))
+                    {
+                        yield return nested;
+                    }
+                }
+            }
+
+            var preview = Visit(form).OfType<TextBox>()
+                .Single(box => box.Multiline && box.ReadOnly);
+            Require(preview.Text.Contains(challenge.OperationId, StringComparison.Ordinal)
+                    && preview.Text.Contains(challenge.SourcePath, StringComparison.Ordinal)
+                    && preview.Text.Contains(challenge.DestinationPath, StringComparison.Ordinal)
+                    && preview.Text.Contains(challenge.SourceSha256, StringComparison.Ordinal),
+                "modal must display the exact operation, paths and source fingerprint");
+
+            var approve = Visit(form).OfType<Button>()
+                .Single(button => button.DialogResult == DialogResult.Yes);
+            var deny = Visit(form).OfType<Button>()
+                .Single(button => button.DialogResult == DialogResult.No);
+            Require(!approve.Enabled, "Yes must stay disabled before explicit acknowledgement");
+            Require(deny.Enabled, "denial is available without acknowledgement");
+
+            form.SetAcknowledgedForTest(true);
+            Require(form.IsApprovalEnabledForTest && approve.Enabled,
+                "user acknowledgement unlocks the explicit affirmative control");
+
+            form.SetAcknowledgedForTest(false);
+            Require(!form.IsApprovalEnabledForTest,
+                "unchecking the confirmation must revoke the affirmative control");
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+    })
+    {
+        IsBackground = true
+    };
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    Require(thread.Join(TimeSpan.FromSeconds(10)),
+        "Windows form creation must not deadlock on a local STA thread");
+    if (failure is not null)
+    {
+        throw new InvalidOperationException(
+            "Native move confirmation dialog inspection failed.", failure);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
