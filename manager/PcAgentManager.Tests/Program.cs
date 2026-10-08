@@ -3068,6 +3068,93 @@ Run("Real Windows move confirmation form renders exact fields and defaults to de
     }
 });
 
+
+Run("Live WinForms move modal rejects a forged Yes result without a button click", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    Exception? error = null;
+    var finished = false;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var issued = DateTimeOffset.UtcNow;
+            var challenge = new LocalMoveDialogConsentPrototype.DialogChallenge(
+                new string('9', 32), "cmd-live-forgery", "device-demo", "op-live-forgery",
+                @"C:\\PreviewOnly\\source.txt", @"C:\\PreviewOnly\\destination.txt",
+                @"C:\\PreviewOnly", new string('a', 64),
+                issued, issued.AddSeconds(8));
+
+            using var form = new LocalMoveConfirmationFormPrototype(challenge);
+            form.Shown += (_, _) => form.BeginInvoke(() =>
+            {
+                // A malicious caller sets a Yes-shaped result directly
+                // without clicking the confirmation control.
+                form.DialogResult = DialogResult.Yes;
+                form.Close();
+            });
+
+            var result = form.ShowDialog();
+            Equal(DialogResult.No, result,
+                "synthetic DialogResult.Yes must be rewritten to denial");
+            Require(!form.ApprovedByExplicitClick,
+                "synthetic result must never count as local consent");
+            finished = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+    }) { IsBackground = true };
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    Require(thread.Join(TimeSpan.FromSeconds(12)),
+        "real modal must finish its Windows message loop without deadlocking");
+    if (error is not null) throw new InvalidOperationException("Live modal failed", error);
+    Require(finished, "modal must have run and returned");
+});
+
+Run("Live WinForms move modal automatically refuses an expired confirmation", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    Exception? error = null;
+    var finished = false;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var challenge = new LocalMoveDialogConsentPrototype.DialogChallenge(
+                new string('8', 32), "cmd-live-expired", "device-demo", "op-live-expired",
+                @"C:\\PreviewOnly\\source.txt", @"C:\\PreviewOnly\\destination.txt",
+                @"C:\\PreviewOnly", new string('b', 64),
+                now, now.AddMilliseconds(600));
+
+            using var form = new LocalMoveConfirmationFormPrototype(challenge);
+            var result = form.ShowDialog();
+            Equal(DialogResult.No, result,
+                "expired visible modal must automatically close and deny");
+            Require(!form.ApprovedByExplicitClick,
+                "expired visible dialog must not grant a move");
+            finished = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+    }) { IsBackground = true };
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    Require(thread.Join(TimeSpan.FromSeconds(10)),
+        "expired visible modal must not remain open indefinitely");
+    if (error is not null) throw new InvalidOperationException("Modal expiry failed", error);
+    Require(finished, "expired modal must return denial");
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
