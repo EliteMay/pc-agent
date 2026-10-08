@@ -2366,6 +2366,47 @@ Run("Windows ACL pipe factory fails closed if another process already owns the n
     Require(denied, "preexisting pipe instance must never be reused as trusted ACL listener");
 });
 
+
+Run("Windows ACL pipe rejects a genuinely different local user by kernel access check", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var otherName = Environment.GetEnvironmentVariable("PC_AGENT_TEST_ALT_USER");
+    var otherPassword = Environment.GetEnvironmentVariable("PC_AGENT_TEST_ALT_PASSWORD");
+    var mustRun = Environment.GetEnvironmentVariable("PC_AGENT_REQUIRE_ALT_USER_TEST")
+        == "1";
+
+    if (string.IsNullOrWhiteSpace(otherName)
+        || string.IsNullOrWhiteSpace(otherPassword))
+    {
+        if (mustRun)
+        {
+            throw new InvalidOperationException(
+                "Required cross-user ACL test credentials were not provisioned.");
+        }
+
+        Console.WriteLine("SKIP cross-user ACL attempt: test account not provisioned");
+        return;
+    }
+
+    var pipeName = "PcAgentAclTest-" + Guid.NewGuid().ToString("N");
+    using var server = OwnerOnlyNamedPipePrototype.CreateForCurrentUser(pipeName);
+    var owner = System.Security.Principal.WindowsIdentity.GetCurrent().User
+        ?? throw new InvalidOperationException("Missing current Windows SID");
+
+    // Unlike DACL inspection alone, this opens the actual kernel named pipe
+    // while impersonating a separate local Windows logon token.
+    WindowsCrossUserPipeProbe.AssertDifferentLocalUserDenied(
+        pipeName, owner, otherName, otherPassword);
+    OwnerOnlyNamedPipePrototype.VerifyActualDacl(server, owner);
+
+    // Negative attempt must not break access for the real authorized owner.
+    using var authorizedClient = new NamedPipeClientStream(
+        ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+    authorizedClient.Connect(2000);
+    Require(authorizedClient.IsConnected, "owner still connects after denial");
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
