@@ -37,6 +37,31 @@ public static class PcAgentNotepadInput {
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref POINT point);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
+
+    public static bool Activate(IntPtr hwnd) {
+        if (GetForegroundWindow() == hwnd) return true;
+        // Windows normally forbids a background process from stealing focus.
+        // Attach temporarily to the actual foreground thread so an approved
+        // GUI command can direct input to its verified Notepad window.
+        var foreground = GetForegroundWindow();
+        uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, out _);
+        uint currentThread = GetCurrentThreadId();
+        bool attached = foregroundThread != 0 && foregroundThread != currentThread
+            && AttachThreadInput(currentThread, foregroundThread, true);
+        try {
+            ShowWindow(hwnd, 5); // SW_SHOW; minimized targets were already rejected
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+        } finally {
+            if (attached) AttachThreadInput(currentThread, foregroundThread, false);
+        }
+        return GetForegroundWindow() == hwnd;
+    }
+
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll", SetLastError=true)]
     private static extern uint SendInput(uint count, [In] INPUT[] inputs, int size);
@@ -161,7 +186,7 @@ $windows = @(
 )
 if ($windows.Count -ne 1) { throw 'Exactly one visible Notepad window is required.' }
 $target = [IntPtr]$windows[0]
-if (-not [PcAgentNotepadInput]::SetForegroundWindow($target)) {
+if (-not [PcAgentNotepadInput]::Activate($target)) {
     throw 'Unable to activate the Notepad window.'
 }
 Start-Sleep -Milliseconds 100
