@@ -178,3 +178,47 @@ test("named pipe exposes pending approval and accepts local decision", {
     await server.close();
   }
 });
+
+
+test("privileged IPC fails closed when no Manager launch credential was configured", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const pipeName = "PcAgent-NoApprovalSecret-" + randomUUID();
+  let responses = 0;
+  let shutdowns = 0;
+  const server = createNamedPipeServer({
+    pipeName,
+    getHealth: () => ({ version: "0.11.0", protocol_version: 1 }),
+    getPendingApproval: () => ({ operation_id: "op-private" }),
+    onApprovalResponse() {
+      responses += 1;
+      return { accepted: true };
+    },
+    onPrepareShutdown() {
+      shutdowns += 1;
+    }
+  });
+
+  await server.listen();
+  try {
+    for (const method of [
+      "get_pending_approval",
+      "respond_approval",
+      "prepare_shutdown"
+    ]) {
+      const result = await request(pipeName, method, {
+        auth_token: "a".repeat(64),
+        operation_id: "op-private",
+        decision: "approved"
+      });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.error.code, "LOCAL_IPC_AUTH_REQUIRED");
+    }
+
+    assert.equal(responses, 0);
+    assert.equal(shutdowns, 0);
+  } finally {
+    await server.close();
+  }
+});
