@@ -14,6 +14,7 @@ import { ToolRegistry } from "../src/tools/tool-registry.js";
 import { OperationJournal } from "../src/journal/operation-journal.js";
 import { executeRegisteredCommand } from "../src/execution/agent-runtime.js";
 import { createCopyFileTool } from "../src/tools/copy-file.js";
+import { createMovePathTool } from "../src/tools/move-path.js";
 
 function command(tool, args, suffix = "1") {
   return {
@@ -155,6 +156,54 @@ test("copy_file refuses source content changes made during approval", {
 
     assert.equal(existsSync(destination), false);
     assert.equal(readFileSync(source, "utf8"), changed);
+  } finally {
+    journal.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("move_path refuses a replaced source after the user approved it", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const root = realpathSync.native(
+    mkdtempSync(path.join(tmpdir(), "pc-agent-approval-move-"))
+  );
+  const source = path.join(root, "source.txt");
+  const destination = path.join(root, "moved.txt");
+  const registry = new ToolRegistry();
+  const journal = new OperationJournal(":memory:");
+
+  writeFileSync(source, "approved original contents", "utf8");
+  registry.register(createMovePathTool({ allowedRoots: [root] }));
+
+  try {
+    await assert.rejects(
+      executeRegisteredCommand({
+        registry,
+        journal,
+        command: command(
+          "move_path",
+          { source_path: source, destination_path: destination },
+          "4"
+        ),
+        approvalProvider: {
+          async requestApproval({ summary }) {
+            assert.equal(summary.action, "move_path");
+            assert.match(summary.source_fingerprint, /^[a-f0-9]{64}$/);
+            writeFileSync(source, "replacement is longer than the original contents", "utf8");
+            return "approved";
+          }
+        },
+        now: new Date("2026-10-07T01:00:00.000Z")
+      }),
+      { code: "APPROVED_STATE_CHANGED" }
+    );
+
+    assert.equal(existsSync(destination), false);
+    assert.equal(
+      readFileSync(source, "utf8"),
+      "replacement is longer than the original contents"
+    );
   } finally {
     journal.close();
     rmSync(root, { recursive: true, force: true });
