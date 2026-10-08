@@ -1,10 +1,8 @@
 import {
-  constants,
-  copyFileSync,
   existsSync,
   lstatSync,
   readFileSync,
-  rmSync
+  writeFileSync
 } from "node:fs";
 import { Capabilities } from "../security/capabilities.js";
 import {
@@ -135,11 +133,9 @@ export function createCopyFileTool({
       }
 
       try {
-        copyFileSync(
-          planned.sourcePath,
-          planned.destinationPath,
-          constants.COPYFILE_EXCL
-        );
+        // Create a new file from the exact bytes that were verified.
+        // "wx" refuses to replace a destination that appears concurrently.
+        writeFileSync(planned.destinationPath, currentBytes, { flag: "wx" });
       } catch (error) {
         throw new SafeWriteToolError(
           "File copy failed.",
@@ -176,13 +172,8 @@ export function createCopyFileTool({
           verified: true
         });
       } catch (error) {
-        try {
-          rmSync(planned.destinationPath, {
-            force: true
-          });
-        } catch {
-          // Best-effort rollback only.
-        }
+        // Preserve a potentially replaced destination for investigation.
+        // Blind rollback could delete another process's file.
         throw error;
       }
     }
