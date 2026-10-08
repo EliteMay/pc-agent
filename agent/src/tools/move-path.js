@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -14,27 +13,12 @@ import {
   requireWindowsForWrite
 } from "./safe-write-common.js";
 import {
+  fingerprintPathStats,
   isPathInside,
   planPathTransfer,
   requireSourceDestinationArgs,
   sameWindowsVolume
 } from "./safe-path-ops-common.js";
-
-function fingerprintSource(stats) {
-  const fields = [
-    stats.dev,
-    stats.ino,
-    stats.size,
-    stats.mode,
-    stats.mtimeNs,
-    stats.ctimeNs,
-    stats.birthtimeNs
-  ];
-
-  return createHash("sha256")
-    .update(fields.map(String).join("|"))
-    .digest("hex");
-}
 
 export function createMovePathTool({ allowedRoots }) {
   function plan(args) {
@@ -87,7 +71,7 @@ export function createMovePathTool({ allowedRoots }) {
       sourceType: stats.isDirectory()
         ? "directory"
         : "file",
-      sourceFingerprint: fingerprintSource(stats)
+      sourceFingerprint: fingerprintPathStats(stats)
     });
   }
 
@@ -136,6 +120,18 @@ export function createMovePathTool({ allowedRoots }) {
         throw new SafeWriteToolError(
           "Source path changed before move.",
           "PATH_CHANGED_DURING_OPERATION"
+        );
+      }
+
+      const currentStats = lstatSync(
+        planned.sourcePath,
+        { bigint: true }
+      );
+
+      if (fingerprintPathStats(currentStats) !== planned.sourceFingerprint) {
+        throw new SafeWriteToolError(
+          "Source identity changed before move.",
+          "SOURCE_CHANGED_DURING_OPERATION"
         );
       }
 
