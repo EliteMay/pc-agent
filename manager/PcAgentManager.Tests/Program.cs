@@ -464,9 +464,16 @@ Run("Windows move prototype refuses a preexisting target without losing data", (
         {
             WindowsNoReplaceMovePrototype.MoveFileForTest(source, destination);
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception error)
         {
-            refused = true;
+            // A generic API parameter error is NOT evidence of no-overwrite.
+            refused = error.NativeErrorCode is 80 or 183;
+            if (!refused)
+            {
+                throw new InvalidOperationException(
+                    $"Native rename failed for an unexpected reason: {error.NativeErrorCode}",
+                    error);
+            }
         }
 
         Require(refused, "existing destination must be rejected by Windows");
@@ -503,9 +510,16 @@ Run("Windows move prototype fails when a competing target appears at the native 
                     destination,
                     "concurrently created target"));
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception error)
         {
-            refused = true;
+            // A generic API parameter error is NOT evidence of no-overwrite.
+            refused = error.NativeErrorCode is 80 or 183;
+            if (!refused)
+            {
+                throw new InvalidOperationException(
+                    $"Native rename failed for an unexpected reason: {error.NativeErrorCode}",
+                    error);
+            }
         }
 
         Require(refused, "native rename must refuse the competing target");
