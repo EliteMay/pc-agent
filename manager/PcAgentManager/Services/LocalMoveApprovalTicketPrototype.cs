@@ -16,11 +16,14 @@ internal sealed class LocalMoveApprovalTicketPrototype : IDisposable
     private static readonly TimeSpan MaxLifetime = TimeSpan.FromMinutes(2);
 
     private readonly byte[] _secret;
+    private readonly DurableMoveApprovalReplayStorePrototype? _durableReplayStore;
     private readonly HashSet<string> _consumedOperations = new(StringComparer.Ordinal);
     private readonly object _gate = new();
     private bool _disposed;
 
-    internal LocalMoveApprovalTicketPrototype(byte[] ephemeralKey)
+    internal LocalMoveApprovalTicketPrototype(
+        byte[] ephemeralKey,
+        DurableMoveApprovalReplayStorePrototype? durableReplayStore = null)
     {
         if (ephemeralKey is null || ephemeralKey.Length != 32)
         {
@@ -28,6 +31,7 @@ internal sealed class LocalMoveApprovalTicketPrototype : IDisposable
         }
 
         _secret = (byte[])ephemeralKey.Clone();
+        _durableReplayStore = durableReplayStore;
     }
 
     internal sealed record MoveRequest(
@@ -151,14 +155,18 @@ internal sealed class LocalMoveApprovalTicketPrototype : IDisposable
 
         lock (_gate)
         {
-            // The test-only replay cache deliberately fails closed at capacity.
-            // Production must persist this state in the operation journal.
             if (_consumedOperations.Count >= MaxConsumedOperations
-                || !_consumedOperations.Add(payload.OperationId))
+                || _consumedOperations.Contains(payload.OperationId))
             {
                 throw new InvalidOperationException(
                     "Approval operation already used or replay capacity exhausted.");
             }
+
+            // Reserve the operation ID durably *before* it can be executed.
+            // A failed reservation denies execution; never fall back to RAM.
+            // A crash after reservation but before a move leaves it blocked.
+            _durableReplayStore?.Reserve(payload.OperationId);
+            _consumedOperations.Add(payload.OperationId);
         }
     }
 
