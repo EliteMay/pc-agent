@@ -102,6 +102,9 @@ export function createNotepadGuiTool({
   function checkFileAllowed(args) {
     if (args.action !== "open") return args;
     const canonical = resolveExistingPathWithinAllowedRoots(args.path, allowedRoots);
+    if (path.win32.extname(canonical).toLowerCase() !== ".txt") {
+      throw new ReadOnlyToolError("The resolved file must also be .txt.", "INVALID_OPEN_FILE");
+    }
     if (isSensitivePath(args.path) || isSensitivePath(canonical)) {
       throw new ReadOnlyToolError("Sensitive paths are not permitted.", "SENSITIVE_PATH");
     }
