@@ -1169,6 +1169,143 @@ Run("NT relative-handle move blocks relocation of an intermediate source ancesto
     }
 });
 
+
+Run("NT move approval binds source SHA even when size and last-write time are restored", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveHashTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(root, "moved.txt");
+        File.WriteAllText(source, "first-contents");
+        var originalWriteTime = File.GetLastWriteTimeUtc(source);
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "content-approved-1");
+
+        File.WriteAllText(source, "other-contents");
+        File.SetLastWriteTimeUtc(source, originalWriteTime);
+
+        var current = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "content-approved-2");
+
+        Equal(approved.SourceIdentity, current.SourceIdentity,
+            "the replacement must keep the same file identity, length and write timestamp");
+        Require(approved.SourceSha256 != current.SourceSha256,
+            "same-metadata content mutation must change SHA");
+
+        var denied = false;
+        try
+        {
+            WindowsNoReplaceMovePrototype.MoveFileForTest(
+                source, destination,
+                approved: approved, operationId: "content-approved-1",
+                useNativeRelativeMoveForTest: true);
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+
+        Require(denied, "changed content must invalidate approval even if metadata is restored");
+        Equal("other-contents", File.ReadAllText(source), "modified source must stay");
+        Require(!File.Exists(destination), "unapproved content must not move");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("NT move keeps concurrent source writers out while the approved handle is open", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveHashTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "source.txt");
+        var destination = Path.Combine(root, "moved.txt");
+        File.WriteAllText(source, "unchanged-approved-bytes");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, root, "content-approved-3");
+
+        var writerRejected = false;
+        WindowsNoReplaceMovePrototype.MoveFileForTest(
+            source,
+            destination,
+            beforeNativeRename: () =>
+            {
+                try
+                {
+                    using var writer = new FileStream(
+                        source, FileMode.Open, FileAccess.Write,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    writer.WriteByte(0x78);
+                }
+                catch (IOException)
+                {
+                    writerRejected = true;
+                }
+            },
+            approved: approved, operationId: "content-approved-3",
+            useNativeRelativeMoveForTest: true);
+
+        Require(writerRejected, "writers must not open while the rename handle is held");
+        Require(!File.Exists(source), "approved file moved");
+        Equal("unchanged-approved-bytes", File.ReadAllText(destination),
+            "the renamed file must retain approved content");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Run("NT move prototype rejects approval of an oversized source without reading it", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var root = Path.Combine(Path.GetTempPath(), "PcAgentMoveHashTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        var source = Path.Combine(root, "oversized.bin");
+        var destination = Path.Combine(root, "moved.bin");
+        using (var stream = new FileStream(source, FileMode.CreateNew, FileAccess.Write))
+        {
+            stream.SetLength(64L * 1024 * 1024 + 1);
+        }
+
+        var rejected = false;
+        try
+        {
+            _ = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+                source, destination, root, "content-approved-4");
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+
+        Require(rejected, "source size must be bounded to 64 MiB in the prototype");
+        Require(File.Exists(source), "large source preserved");
+        Require(!File.Exists(destination), "no large target created");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
