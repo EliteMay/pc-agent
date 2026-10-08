@@ -440,6 +440,7 @@ public sealed class MainForm : Form
             var accepted = await _supervisor.RespondApprovalAsync(
                 pending.OperationId,
                 approved,
+                pending.ApprovalNonce,
                 responseCts.Token);
 
             if (!accepted)
