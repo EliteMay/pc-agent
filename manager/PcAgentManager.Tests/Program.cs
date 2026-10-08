@@ -1,4 +1,7 @@
 using System.IO.Compression;
+using System.IO.Pipes;
+using System.Text;
+using System.Text.Json;
 using PcAgentManager.Services;
 using PcAgentManager.Configuration;
 using PcAgentManager.Supervision;
@@ -1685,6 +1688,83 @@ Run("Durable replay store fails closed when its directory is invalid", () =>
     {
         Directory.Delete(root, recursive: true);
     }
+});
+
+
+Run("Manager pipe client blocks unauthenticated privileged requests before connection", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var client = new NamedPipeAgentClient("PcAgent-Test-MissingKey-" + Guid.NewGuid().ToString("N"));
+    var deniedResponse = false;
+    try
+    {
+        _ = client.RespondApprovalAsync("op-private", "approved").GetAwaiter().GetResult();
+    }
+    catch (InvalidOperationException)
+    {
+        deniedResponse = true;
+    }
+    Require(deniedResponse, "Manager must not attempt unauthenticated approval");
+
+    var deniedPreview = false;
+    try
+    {
+        _ = client.GetPendingApprovalAsync().GetAwaiter().GetResult();
+    }
+    catch (InvalidOperationException)
+    {
+        deniedPreview = true;
+    }
+    Require(deniedPreview, "Manager must not request private approvals without a key");
+});
+
+Run("Manager sends per-launch secret for an authorized approval over Windows named pipe", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var pipeName = "PcAgent-Auth-Test-" + Guid.NewGuid().ToString("N");
+    var secret = new string('c', 64);
+    using var server = new NamedPipeServerStream(
+        pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+        PipeOptions.Asynchronous);
+
+    var serverTask = Task.Run(async () =>
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await server.WaitForConnectionAsync(timeout.Token);
+
+        using var reader = new StreamReader(
+            server, new UTF8Encoding(false), false, 4096, leaveOpen: true);
+        using var writer = new StreamWriter(
+            server, new UTF8Encoding(false), 4096, leaveOpen: true)
+        {
+            AutoFlush = true
+        };
+
+        var line = await reader.ReadLineAsync(timeout.Token)
+            ?? throw new InvalidDataException("Missing IPC request");
+        using var parsed = JsonDocument.Parse(line);
+        var message = parsed.RootElement;
+        Equal("respond_approval",
+            message.GetProperty("method").GetString(), "authenticated IPC method");
+        var parameters = message.GetProperty("params");
+        Equal(secret, parameters.GetProperty("auth_token").GetString(),
+            "authorization key must be sent to Agent");
+        Equal("op-private", parameters.GetProperty("operation_id").GetString(),
+            "operation ID must be bound to local user confirmation");
+        Equal("approved", parameters.GetProperty("decision").GetString(),
+            "decision must match local approval");
+
+        await writer.WriteLineAsync(
+            "{\"id\":\"reply\",\"ok\":true,\"result\":{\"accepted\":true}}");
+    });
+
+    var client = new NamedPipeAgentClient(pipeName, secret);
+    var result = client.RespondApprovalAsync("op-private", "approved")
+        .GetAwaiter().GetResult();
+    Require(result.Accepted, "authenticated local approval reply must be accepted");
+    serverTask.GetAwaiter().GetResult();
 });
 
 if (failures.Count > 0)
