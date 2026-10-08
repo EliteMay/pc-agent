@@ -3155,6 +3155,70 @@ Run("Live WinForms move modal automatically refuses an expired confirmation", ()
     Require(finished, "expired modal must return denial");
 });
 
+
+Run("Live WinForms research Yes button requires acknowledgement and its own click callback", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    Exception? error = null;
+    var finished = false;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var challenge = new LocalMoveDialogConsentPrototype.DialogChallenge(
+                new string('7', 32), "cmd-click-regression", "demo-device", "op-click-regression",
+                @"C:\\PreviewOnly\\source.txt", @"C:\\PreviewOnly\\destination.txt",
+                @"C:\\PreviewOnly", new string('c', 64), now, now.AddSeconds(8));
+
+            using var form = new LocalMoveConfirmationFormPrototype(challenge);
+            static IEnumerable<Control> Descendants(Control root)
+            {
+                foreach (Control control in root.Controls)
+                {
+                    yield return control;
+                    foreach (var child in Descendants(control)) yield return child;
+                }
+            }
+
+            var yesButton = Descendants(form).OfType<Button>()
+                .Single(button => button.Text == "内容を確認して許可");
+            form.Shown += (_, _) => form.BeginInvoke(new Action(() =>
+            {
+                Require(!yesButton.Enabled,
+                    "the unacknowledged native Yes button must be disabled");
+                yesButton.PerformClick();
+                Require(!form.ApprovedByExplicitClick,
+                    "clicking a disabled approval button cannot grant anything");
+
+                form.SetAcknowledgedForTest(true);
+                Require(yesButton.Enabled,
+                    "acknowledging exact preview is required before Yes");
+                yesButton.PerformClick();
+            }));
+
+            var result = form.ShowDialog();
+            Equal(DialogResult.Yes, result, "checked test callback returns Yes");
+            Require(form.ApprovedByExplicitClick,
+                "the affirmative result must originate in the checked Yes click callback");
+            finished = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+    }) { IsBackground = true };
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    Require(thread.Join(TimeSpan.FromSeconds(12)),
+        "checked-click modal must terminate without deadlock");
+    if (error is not null) throw new InvalidOperationException(
+        "Checked Yes click regression failed", error);
+    Require(finished, "native checked-click modal must have completed");
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
