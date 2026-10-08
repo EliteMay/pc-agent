@@ -150,6 +150,22 @@ internal static class WindowsNoReplaceMovePrototype
             ValidateApproval(approved, sourceHandle, parentHandle, rootHandle!);
         }
 
+        // On the NT-only research path, keep every directory below the
+        // approved root up to both source and destination parents opened
+        // WITHOUT FILE_SHARE_DELETE. This blocks rename/reparse replacement
+        // of any of those directory objects while the native move executes.
+        // Ancestors ABOVE the approved root still require separate policy.
+        using var ancestorGuards = useNativeRelativeMoveForTest
+            ? OpenProtectedDirectoryChain(approved!)
+            : null;
+
+        if (useNativeRelativeMoveForTest)
+        {
+            // Revalidate after obtaining every guard in case names changed
+            // during guard acquisition. Locks stay alive for the NT rename.
+            ValidateApproval(approved!, sourceHandle, parentHandle, rootHandle!);
+        }
+
         var utf16Name = Encoding.Unicode.GetBytes(destinationPath);
         if (utf16Name.Length == 0 || utf16Name.Length > 65536)
         {
@@ -357,6 +373,106 @@ internal static class WindowsNoReplaceMovePrototype
         {
             throw new InvalidOperationException(
                 "An approved filesystem pathname was replaced.");
+        }
+    }
+
+    private sealed class DirectoryGuardScope : IDisposable
+    {
+        private readonly List<SafeFileHandle> _handles = [];
+
+        internal void Add(SafeFileHandle handle) => _handles.Add(handle);
+
+        public void Dispose()
+        {
+            for (var i = _handles.Count - 1; i >= 0; i--)
+            {
+                _handles[i].Dispose();
+            }
+            _handles.Clear();
+        }
+    }
+
+    private static DirectoryGuardScope OpenProtectedDirectoryChain(
+        MoveApprovalSnapshotForTest approved)
+    {
+        var guards = new DirectoryGuardScope();
+        var opened = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var root = Path.GetFullPath(approved.AllowedRootPath);
+
+        try
+        {
+            // Hold the approved root and each traversed directory. A parent
+            // can otherwise be relocated even if its immediate child handle
+            // remains open. Avoid traversal via intermediate junction entries.
+            foreach (var parentPath in new[]
+            {
+                Path.GetDirectoryName(approved.SourcePath)!,
+                Path.GetDirectoryName(approved.DestinationPath)!
+            })
+            {
+                var parent = Path.GetFullPath(parentPath);
+                if (!IsUnderOrEqual(parent, root))
+                {
+                    throw new InvalidOperationException(
+                        "Parent path is not lexically inside allowed root.");
+                }
+
+                var relative = Path.GetRelativePath(root, parent);
+                var components = relative == "."
+                    ? Array.Empty<string>()
+                    : relative.Split(Path.DirectorySeparatorChar);
+
+                var current = root;
+                OpenCurrent();
+
+                foreach (var component in components)
+                {
+                    if (component is "." or ".."
+                        || component.Contains(':')
+                        || component.Length == 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Unsupported component in guarded parent path.");
+                    }
+
+                    current = Path.Combine(current, component);
+                    OpenCurrent();
+                }
+
+                void OpenCurrent()
+                {
+                    if (!opened.Add(current)) return;
+
+                    var handle = OpenFile(
+                        current,
+                        FileReadAttributes | FileTraverse,
+                        FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+                        ShareReadWrite);
+
+                    try
+                    {
+                        EnsurePlainDirectory(handle, "Guarded path component");
+                        if (!IsUnderOrEqual(FinalPath(handle), approved.RootFinalPath))
+                        {
+                            throw new InvalidOperationException(
+                                "Guarded directory escapes approved root.");
+                        }
+                        guards.Add(handle);
+                    }
+                    catch
+                    {
+                        handle.Dispose();
+                        throw;
+                    }
+                }
+            }
+
+            return guards;
+        }
+        catch
+        {
+            guards.Dispose();
+            throw;
         }
     }
 
