@@ -34,6 +34,21 @@ internal static class Program
             return;
         }
 
+        // Explicit local-only UI experiment. Both commands contain fake
+        // paths and cannot issue a move approval, connect to the Agent, or
+        // write replay journals. The unattended smoke mode auto-denies.
+        if (args.Contains("--native-move-preview-smoke", StringComparer.OrdinalIgnoreCase))
+        {
+            Environment.ExitCode = LocalMoveDialogPreviewRunner.Run(autoDeny: true);
+            return;
+        }
+
+        if (args.Contains("--native-move-preview", StringComparer.OrdinalIgnoreCase))
+        {
+            Environment.ExitCode = LocalMoveDialogPreviewRunner.Run(autoDeny: false);
+            return;
+        }
+
         if (TryGetOption(args, "--update-bootstrap", out var statePath))
         {
             if (!TryGetIntOption(args, "--parent-pid", out var parentPid))
