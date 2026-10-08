@@ -13,10 +13,23 @@ public sealed class NamedPipeAgentClient
     };
 
     private readonly string _pipeName;
+    private readonly string? _localApprovalSecret;
 
-    public NamedPipeAgentClient(string pipeName)
+    public NamedPipeAgentClient(string pipeName, string? localApprovalSecret = null)
     {
         _pipeName = pipeName;
+        _localApprovalSecret = localApprovalSecret;
+    }
+
+    private void RequireLocalAuthentication()
+    {
+        if (_localApprovalSecret is null
+            || _localApprovalSecret.Length != 64
+            || !_localApprovalSecret.All(Uri.IsHexDigit))
+        {
+            throw new InvalidOperationException(
+                "Authenticated Manager IPC credential is unavailable.");
+        }
     }
 
     public async Task<AgentHealthSnapshot> GetHealthAsync(
@@ -33,9 +46,10 @@ public sealed class NamedPipeAgentClient
     public async Task<PendingApprovalSnapshot?> GetPendingApprovalAsync(
         CancellationToken cancellationToken = default)
     {
+        RequireLocalAuthentication();
         var result = await SendAsync(
             "get_pending_approval",
-            parameters: null,
+            new { auth_token = _localApprovalSecret },
             cancellationToken);
 
         if (result.ValueKind == JsonValueKind.Null)
@@ -53,13 +67,15 @@ public sealed class NamedPipeAgentClient
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(decision);
+        RequireLocalAuthentication();
 
         var result = await SendAsync(
             "respond_approval",
             new
             {
                 operation_id = operationId,
-                decision
+                decision,
+                auth_token = _localApprovalSecret
             },
             cancellationToken);
 
@@ -74,7 +90,8 @@ public sealed class NamedPipeAgentClient
     public async Task PrepareShutdownAsync(
         CancellationToken cancellationToken = default)
     {
-        _ = await SendAsync("prepare_shutdown", parameters: null, cancellationToken);
+        RequireLocalAuthentication();
+        _ = await SendAsync("prepare_shutdown", new { auth_token = _localApprovalSecret }, cancellationToken);
     }
 
     private async Task<JsonElement> SendAsync(
@@ -127,6 +144,13 @@ public sealed class NamedPipeAgentClient
 
         using var document = JsonDocument.Parse(line);
         var root = document.RootElement;
+
+        if (!root.TryGetProperty("id", out var returnedId)
+            || returnedId.ValueKind != JsonValueKind.String
+            || !string.Equals(returnedId.GetString(), id, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("Agent IPC response ID does not match the request.");
+        }
 
         if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
         {
