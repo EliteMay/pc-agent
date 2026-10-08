@@ -99,7 +99,7 @@ internal static class WindowsNoReplaceMovePrototype
 
         using var sourceHandle = OpenFile(
             originalPath,
-            DeleteAccess | FileReadAttributes | (useNativeRelativeMoveForTest ? FileReadData : 0),
+            DeleteAccess | FileReadAttributes | (approved is not null ? FileReadData : 0),
             FileFlagOpenReparsePoint,
             // For the native research path, do not share WRITE or DELETE.
             // This excludes other open write/delete handles and fails closed
@@ -549,7 +549,7 @@ internal static class WindowsNoReplaceMovePrototype
             throw new IOException("Source size changed during approval verification.");
         }
 
-        return Convert.ToHexStringLower(hasher.GetHashAndReset());
+        return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
     }
 
     private static MoveObjectIdentity GetIdentity(SafeFileHandle handle)
