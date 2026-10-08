@@ -52,10 +52,16 @@ public sealed class NamedPipeAgentClient
     public async Task<ApprovalResponseSnapshot> RespondApprovalAsync(
         string operationId,
         string decision,
+        string approvalNonce,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(decision);
+        if (approvalNonce.Length != 32 || !approvalNonce.All(Uri.IsHexDigit))
+        {
+            throw new InvalidOperationException(
+                "Approval response must match a valid pending UI challenge.");
+        }
         RequireLocalAuthentication();
 
         var result = await SendAsync(
@@ -64,6 +70,7 @@ public sealed class NamedPipeAgentClient
             {
                 operation_id = operationId,
                 decision,
+                approval_nonce = approvalNonce,
                 auth_token = _localApprovalSecret
             },
             cancellationToken);
