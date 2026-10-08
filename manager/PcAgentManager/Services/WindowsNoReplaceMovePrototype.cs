@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
@@ -19,6 +20,9 @@ internal static class WindowsNoReplaceMovePrototype
 {
     private const uint DeleteAccess = 0x00010000;
     private const uint FileReadAttributes = 0x00000080;
+    private const uint FileReadData = 0x00000001;
+    private const uint ShareRead = 0x00000001;
+    private const long MaxApprovedSourceBytes = 64L * 1024 * 1024;
     private const uint FileTraverse = 0x00000020;
     private const uint ShareReadWriteDelete = 0x00000007;
     private const uint ShareReadWrite = 0x00000003;
@@ -95,9 +99,12 @@ internal static class WindowsNoReplaceMovePrototype
 
         using var sourceHandle = OpenFile(
             originalPath,
-            DeleteAccess | FileReadAttributes,
+            DeleteAccess | FileReadAttributes | (useNativeRelativeMoveForTest ? FileReadData : 0),
             FileFlagOpenReparsePoint,
-            useNativeRelativeMoveForTest ? ShareReadWrite : ShareReadWriteDelete);
+            // For the native research path, do not share WRITE or DELETE.
+            // This excludes other open write/delete handles and fails closed
+            // if the file cannot be held stable during rename.
+            useNativeRelativeMoveForTest ? ShareRead : ShareReadWriteDelete);
 
         using var parentHandle = OpenFile(
             destinationDirectory,
@@ -277,8 +284,9 @@ internal static class WindowsNoReplaceMovePrototype
             FileFlagBackupSemantics | FileFlagOpenReparsePoint);
         using var sourceHandle = OpenFile(
             sourcePath,
-            FileReadAttributes,
-            FileFlagOpenReparsePoint);
+            FileReadAttributes | FileReadData,
+            FileFlagOpenReparsePoint,
+            ShareRead);
         using var parentHandle = OpenFile(
             parentPath,
             FileReadAttributes | FileTraverse,
@@ -308,6 +316,7 @@ internal static class WindowsNoReplaceMovePrototype
             canonicalParent,
             canonicalRoot,
             GetIdentity(sourceHandle),
+            HashOpenFile(sourceHandle),
             GetIdentity(parentHandle),
             GetIdentity(rootHandle));
     }
@@ -327,6 +336,7 @@ internal static class WindowsNoReplaceMovePrototype
         var rootId = GetIdentity(rootHandle);
 
         if (!sourceId.Equals(approved.SourceIdentity)
+            || !string.Equals(HashOpenFile(sourceHandle), approved.SourceSha256, StringComparison.Ordinal)
             || !SameObject(parentId, approved.ParentIdentity)
             || !SameObject(rootId, approved.RootIdentity))
         {
@@ -498,6 +508,50 @@ internal static class WindowsNoReplaceMovePrototype
         }
     }
 
+    // Bounded streaming hash through the already-opened source handle.
+    // ShareRead (no WRITE/DELETE) is held during native move execution.
+    // Hashes are recomputed immediately before rename, after test hooks.
+    private static string HashOpenFile(SafeFileHandle handle)
+    {
+        var identity = GetIdentity(handle);
+        var length = ((long)identity.FileSizeHigh << 32) | identity.FileSizeLow;
+
+        if (length < 0 || length > MaxApprovedSourceBytes)
+        {
+            throw new InvalidOperationException(
+                "Test-only approved source must not exceed 64 MiB.");
+        }
+
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[64 * 1024];
+        long offset = 0;
+
+        while (offset < length)
+        {
+            var chunk = (int)Math.Min(buffer.Length, length - offset);
+            var count = RandomAccess.Read(handle, buffer.AsSpan(0, chunk), offset);
+
+            if (count <= 0)
+            {
+                throw new IOException("Source changed while hashing its open handle.");
+            }
+
+            hasher.AppendData(buffer, 0, count);
+            offset += count;
+        }
+
+        // File size is checked again after reading. This also catches a
+        // mapped writer growing or shrinking the file mid-hash.
+        var finalIdentity = GetIdentity(handle);
+        if (finalIdentity.FileSizeHigh != identity.FileSizeHigh
+            || finalIdentity.FileSizeLow != identity.FileSizeLow)
+        {
+            throw new IOException("Source size changed during approval verification.");
+        }
+
+        return Convert.ToHexStringLower(hasher.GetHashAndReset());
+    }
+
     private static MoveObjectIdentity GetIdentity(SafeFileHandle handle)
     {
         if (!GetFileInformationByHandle(handle, out var info))
@@ -628,6 +682,7 @@ internal static class WindowsNoReplaceMovePrototype
         string ParentFinalPath,
         string RootFinalPath,
         MoveObjectIdentity SourceIdentity,
+        string SourceSha256,
         MoveObjectIdentity ParentIdentity,
         MoveObjectIdentity RootIdentity);
 
