@@ -2417,8 +2417,6 @@ Run("Manager protected status pipe accepts only versioned read-only PING", () =>
         using var client = new NamedPipeClientStream(
             ".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
         client.Connect(2000);
-        client.ReadTimeout = 3000;
-        client.WriteTimeout = 3000;
 
         var message = Encoding.ASCII.GetBytes(query + "\n");
         client.Write(message);
@@ -2426,7 +2424,9 @@ Run("Manager protected status pipe accepts only versioned read-only PING", () =>
 
         using var reader = new StreamReader(
             client, Encoding.ASCII, false, 1024, leaveOpen: true);
-        return reader.ReadLine()
+        return reader.ReadLineAsync()
+            .WaitAsync(TimeSpan.FromSeconds(3))
+            .GetAwaiter().GetResult()
             ?? throw new InvalidDataException("Protected Manager endpoint closed without reply");
     }
 
