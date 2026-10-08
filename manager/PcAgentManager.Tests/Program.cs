@@ -1759,8 +1759,12 @@ Run("Manager sends per-launch secret for an authorized approval over Windows nam
             parameters.GetProperty("approval_nonce").GetString(),
             "response must bind to the exact local dialog instance");
 
-        await writer.WriteLineAsync(
-            "{\"id\":\"reply\",\"ok\":true,\"result\":{\"accepted\":true}}");
+        await writer.WriteLineAsync(JsonSerializer.Serialize(new
+        {
+            id = message.GetProperty("id").GetString(),
+            ok = true,
+            result = new { accepted = true }
+        }));
     });
 
     var client = new NamedPipeAgentClient(pipeName, secret);
