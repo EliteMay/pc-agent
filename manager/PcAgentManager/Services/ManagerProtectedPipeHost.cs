@@ -110,8 +110,8 @@ internal sealed class ManagerProtectedPipeHost : IAsyncDisposable
                     }
                 }
                 catch (IOException) { }
+                // ObjectDisposedException derives from InvalidOperationException.
                 catch (InvalidOperationException) { }
-                catch (ObjectDisposedException) { }
             }
         }
     }
