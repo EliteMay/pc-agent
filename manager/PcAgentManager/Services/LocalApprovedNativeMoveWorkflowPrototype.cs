@@ -90,7 +90,8 @@ internal sealed class LocalApprovedNativeMoveWorkflowPrototype
     internal void ExecuteForTest(
         ConfirmedMove confirmed,
         DateTimeOffset now,
-        Action? beforeNativeRename = null)
+        Action? beforeNativeRename = null,
+        Action? afterTicketConsumedBeforeMoveForTest = null)
     {
         if (confirmed is null)
         {
@@ -102,6 +103,10 @@ internal sealed class LocalApprovedNativeMoveWorkflowPrototype
         var request = confirmed.Proposal.Request;
         _ticketIssuer.ConsumeForTest(
             confirmed.Ticket, request, now);
+
+        // Test-only crash barrier. A simulated crash here must leave the
+        // operation permanently reserved and unable to be retried.
+        afterTicketConsumedBeforeMoveForTest?.Invoke();
 
         // No automatic retry and no destructive rollback after a failed or
         // potentially successful native rename.
