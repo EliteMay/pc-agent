@@ -2545,7 +2545,8 @@ Run("Windows owner-only durable replay directory protects markers and denies rep
             ?? throw new InvalidOperationException("Missing Windows SID");
         OwnerOnlyReplayDirectoryPrototype.VerifyActualDirectoryAcl(root, owner);
 
-        var first = new DurableMoveApprovalReplayStorePrototype(root);
+        var first = new DurableMoveApprovalReplayStorePrototype(
+            root, requireOwnerOnlyDirectoryForTest: true);
         first.Reserve("approved-operation-1");
 
         var marker = Directory.GetFiles(root, "*.used").Single();
@@ -2565,7 +2566,8 @@ Run("Windows owner-only durable replay directory protects markers and denies rep
                 "marker ACL must contain owner-only allow rules");
         }
 
-        var reopened = new DurableMoveApprovalReplayStorePrototype(root);
+        var reopened = new DurableMoveApprovalReplayStorePrototype(
+            root, requireOwnerOnlyDirectoryForTest: true);
         var refused = false;
         try
         {
@@ -2629,6 +2631,30 @@ Run("Native replay ACL directory factory refuses preexisting and malformed names
     }
 });
 
+Run("Protected replay store refuses a missing directory rather than creating it insecurely", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var path = Path.Combine(
+        Path.GetTempPath(), "PcAgentReplayAclTest-" + Guid.NewGuid().ToString("N"));
+    Require(!Directory.Exists(path), "fixture path must not already exist");
+
+    var refused = false;
+    try
+    {
+        _ = new DurableMoveApprovalReplayStorePrototype(
+            path, requireOwnerOnlyDirectoryForTest: true);
+    }
+    catch (InvalidOperationException)
+    {
+        refused = true;
+    }
+
+    Require(refused, "strict store must fail closed until a secured directory exists");
+    Require(!Directory.Exists(path),
+        "strict store must not create a directory with the parent's default ACL");
+});
+
 Run("Real different Windows user cannot inject a durable replay marker", () =>
 {
     if (!OperatingSystem.IsWindows()) return;
@@ -2657,7 +2683,8 @@ Run("Real different Windows user cannot inject a durable replay marker", () =>
     {
         var owner = System.Security.Principal.WindowsIdentity.GetCurrent().User
             ?? throw new InvalidOperationException("Windows owner SID unavailable");
-        var store = new DurableMoveApprovalReplayStorePrototype(root);
+        var store = new DurableMoveApprovalReplayStorePrototype(
+            root, requireOwnerOnlyDirectoryForTest: true);
         store.Reserve("authorized-owner-operation");
 
         WindowsCrossUserPipeProbe.AssertDifferentLocalUserCannotCreateReplayMarker(
