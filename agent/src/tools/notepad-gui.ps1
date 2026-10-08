@@ -110,7 +110,38 @@ if (-not $env:PC_AGENT_NOTEPAD_ACTION_B64 -or $env:PC_AGENT_NOTEPAD_ACTION_B64.L
 }
 $raw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PC_AGENT_NOTEPAD_ACTION_B64))
 $request = ConvertFrom-Json -InputObject $raw
-if ($request.action -notin @('click', 'type', 'scroll', 'save')) { throw 'Unsupported action.' }
+if ($request.action -notin @('open', 'click', 'type', 'scroll', 'save')) { throw 'Unsupported action.' }
+
+if ($request.action -eq 'open') {
+    $file = [string]$request.path
+    if (-not [System.IO.Path]::IsPathRooted($file) -or
+        [System.IO.Path]::GetExtension($file).ToLowerInvariant() -ne '.txt' -or
+        -not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        throw 'Only an existing absolute .txt file is allowed.'
+    }
+    # A clean single-target state is required; do not spawn another editor
+    # beside an existing visible Notepad that would make later clicks ambiguous.
+    foreach ($p in [System.Diagnostics.Process]::GetProcessesByName('notepad')) {
+        try {
+            $p.Refresh()
+            if ($p.MainWindowHandle -ne [IntPtr]::Zero -and
+                [PcAgentNotepadInput]::IsWindowVisible($p.MainWindowHandle)) {
+                throw 'Close the existing visible Notepad window before open.'
+            }
+        } finally { $p.Dispose() }
+    }
+    Assert-NoProtectedGame
+    $notepadExecutable = [System.IO.Path]::Combine($env:SystemRoot, 'System32', 'notepad.exe')
+    Start-Process -FilePath $notepadExecutable -ArgumentList ('"' + $file + '"') -ErrorAction Stop | Out-Null
+    [Console]::Out.WriteLine((@{
+        target = 'notepad'
+        action = 'open'
+        dispatched = $true
+        verified = $false
+    } | ConvertTo-Json -Compress))
+    exit 0
+}
+
 
 $windows = @(
     foreach ($p in [System.Diagnostics.Process]::GetProcessesByName('notepad')) {
