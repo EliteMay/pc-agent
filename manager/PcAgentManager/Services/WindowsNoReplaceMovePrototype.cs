@@ -50,7 +50,8 @@ internal static class WindowsNoReplaceMovePrototype
         string source,
         string destination,
         Action? beforeNativeRename = null,
-        MoveApprovalSnapshotForTest? approved = null)
+        MoveApprovalSnapshotForTest? approved = null,
+        string? operationId = null)
     {
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
         {
@@ -64,7 +65,8 @@ internal static class WindowsNoReplaceMovePrototype
         var destinationDirectory = Path.GetDirectoryName(destinationPath);
 
         if (approved is not null &&
-            (!PathEquals(approved.SourcePath, originalPath)
+            (!string.Equals(approved.OperationId, operationId, StringComparison.Ordinal)
+             || !PathEquals(approved.SourcePath, originalPath)
              || !PathEquals(approved.DestinationPath, destinationPath)))
         {
             throw new InvalidOperationException(
@@ -186,12 +188,20 @@ internal static class WindowsNoReplaceMovePrototype
     internal static MoveApprovalSnapshotForTest CaptureApprovalForTest(
         string source,
         string destination,
-        string allowedRoot)
+        string allowedRoot,
+        string operationId)
     {
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
         {
             throw new PlatformNotSupportedException(
                 "This experiment is supported only on Windows x64.");
+        }
+
+        if (string.IsNullOrWhiteSpace(operationId) || operationId.Length > 128)
+        {
+            throw new ArgumentException(
+                "A bounded operation ID is mandatory for the approval snapshot.",
+                nameof(operationId));
         }
 
         var sourcePath = Path.GetFullPath(source);
@@ -237,6 +247,7 @@ internal static class WindowsNoReplaceMovePrototype
         }
 
         return new MoveApprovalSnapshotForTest(
+            operationId,
             sourcePath,
             destinationPath,
             rootPath,
@@ -455,6 +466,7 @@ internal static class WindowsNoReplaceMovePrototype
         uint LastWriteTimeLow);
 
     internal sealed record MoveApprovalSnapshotForTest(
+        string OperationId,
         string SourcePath,
         string DestinationPath,
         string AllowedRootPath,
