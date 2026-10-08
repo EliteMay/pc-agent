@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
+using System.Security.Cryptography;
 using System.Text.Json;
 using PcAgentManager.Configuration;
 using PcAgentManager.Models;
@@ -16,6 +17,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
     private readonly CrashRecoveryPolicy _crashPolicy = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _pipeName;
+    private string? _localApprovalSecret;
 
     private Process? _process;
     private WindowsJobObject? _job;
@@ -41,7 +43,8 @@ public sealed class AgentSupervisor : IAsyncDisposable
         _configStore = configStore;
         _emergencyStopStore = emergencyStopStore;
         _logger = logger;
-        _pipeName = BuildPipeName();
+        _pipeName = BuildPipeName() + "-" +
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         Snapshot = ManagerSnapshot.Stopped(emergencyStopStore.IsEngaged);
     }
 
@@ -119,6 +122,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
             _paths.EnsureDirectories();
             _manualStopRequested = false;
+            _localApprovalSecret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
 
             var startInfo = new ProcessStartInfo
             {
@@ -137,6 +141,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
                 JsonSerializer.Serialize(config.AllowedRoots);
             startInfo.Environment["PC_AGENT_JOURNAL_PATH"] = _paths.JournalPath;
             startInfo.Environment["PC_AGENT_PIPE_NAME"] = _pipeName;
+            startInfo.Environment["PC_AGENT_LOCAL_APPROVAL_SECRET"] = _localApprovalSecret;
             startInfo.Environment["PC_AGENT_VERSION"] = "0.11.0";
 
             var process = new Process
@@ -223,7 +228,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
     {
         ThrowIfDisposed();
 
-        var pipe = new NamedPipeAgentClient(_pipeName);
+        var pipe = new NamedPipeAgentClient(_pipeName, _localApprovalSecret);
         var response = await pipe.RespondApprovalAsync(
             operationId,
             approved ? "approved" : "denied",
@@ -309,7 +314,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
             try
             {
-                var pipe = new NamedPipeAgentClient(_pipeName);
+                var pipe = new NamedPipeAgentClient(_pipeName, _localApprovalSecret);
                 using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 await pipe.PrepareShutdownAsync(shutdownCts.Token);
             }
@@ -428,7 +433,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
 
     private async Task MonitorHealthAsync(Process process, CancellationToken cancellationToken)
     {
-        var pipe = new NamedPipeAgentClient(_pipeName);
+        var pipe = new NamedPipeAgentClient(_pipeName, _localApprovalSecret);
 
         while (!cancellationToken.IsCancellationRequested && !process.HasExited)
         {
