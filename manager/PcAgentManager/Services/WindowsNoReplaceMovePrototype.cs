@@ -9,6 +9,9 @@ namespace PcAgentManager.Services;
 /// Research-only Windows file rename experiment. This is NOT wired to the
 /// Agent or Manager UI, and provides NO allowed-root/approval enforcement.
 /// It must not be promoted to a production command until Issue #27 is closed.
+/// Win32 FileRenameInfo with a non-NULL RootDirectory fails with error 87
+/// on our CI runner, so this experiment uses a full destination path.
+/// This intentionally DOES NOT anchor the destination parent against races.
 /// </summary>
 internal static class WindowsNoReplaceMovePrototype
 {
@@ -93,7 +96,7 @@ internal static class WindowsNoReplaceMovePrototype
                 "Target parent must be a normal non-reparse directory.");
         }
 
-        var utf16Name = Encoding.Unicode.GetBytes(destinationName);
+        var utf16Name = Encoding.Unicode.GetBytes(destinationPath);
         if (utf16Name.Length == 0 || utf16Name.Length > 65536)
         {
             throw new ArgumentException("Target name is invalid.");
@@ -110,10 +113,11 @@ internal static class WindowsNoReplaceMovePrototype
         {
             // ReplaceIfExists = FALSE; there is deliberately no replace flag.
             Marshal.WriteInt32(renameInfo, 0, 0);
-            Marshal.WriteIntPtr(
-                renameInfo,
-                8,
-                parentHandle.DangerousGetHandle());
+            // Win32 FileRenameInfo currently rejects RootDirectory handles
+            // on tested Windows versions (ERROR_INVALID_PARAMETER = 87).
+            // This is only a no-replace proof of concept. A production
+            // solution must resolve the parent race using a supported API.
+            Marshal.WriteIntPtr(renameInfo, 8, IntPtr.Zero);
             Marshal.WriteInt32(renameInfo, 16, utf16Name.Length);
             Marshal.Copy(
                 utf16Name,
