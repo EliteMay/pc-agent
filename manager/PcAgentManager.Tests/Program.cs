@@ -3001,6 +3001,8 @@ Run("Real Windows move confirmation form renders exact fields and defaults to de
             using var form = new LocalMoveConfirmationFormPrototype(challenge);
             Require(!form.IsApprovalEnabledForTest,
                 "native file mutation approval must be disabled by default");
+            Require(!form.ApprovedByExplicitClick,
+                "a newly created confirmation cannot count as an explicit click");
             Require(form.AcceptButton is null,
                 "pressing Enter alone must never grant a native move");
             Require(form.CancelButton is not null,
@@ -3028,7 +3030,9 @@ Run("Real Windows move confirmation form renders exact fields and defaults to de
                 "modal must display the exact operation, paths and source fingerprint");
 
             var approve = Visit(form).OfType<Button>()
-                .Single(button => button.DialogResult == DialogResult.Yes);
+                .Single(button => button.Text == "内容を確認して許可");
+            Require(approve.DialogResult == DialogResult.None,
+                "setting the native Yes result alone is not permitted");
             var deny = Visit(form).OfType<Button>()
                 .Single(button => button.DialogResult == DialogResult.No);
             Require(!approve.Enabled, "Yes must stay disabled before explicit acknowledgement");
@@ -3041,6 +3045,8 @@ Run("Real Windows move confirmation form renders exact fields and defaults to de
             form.SetAcknowledgedForTest(false);
             Require(!form.IsApprovalEnabledForTest,
                 "unchecking the confirmation must revoke the affirmative control");
+            Require(!form.ApprovedByExplicitClick,
+                "setting and unsetting the checkbox must not count as a human approval");
         }
         catch (Exception ex)
         {
