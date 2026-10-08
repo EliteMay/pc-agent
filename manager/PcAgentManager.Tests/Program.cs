@@ -1306,6 +1306,62 @@ Run("NT move prototype rejects approval of an oversized source without reading i
     }
 });
 
+
+Run("NT move prevents an ancestor above the approved root from being relocated", () =>
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var sandbox = Path.Combine(
+        Path.GetTempPath(), "PcAgentAncestorRaceTests", Guid.NewGuid().ToString("N"));
+    var relocatedSandbox = sandbox + "-displaced";
+    var approvedRoot = Path.Combine(sandbox, "allowed");
+    Directory.CreateDirectory(approvedRoot);
+
+    try
+    {
+        var source = Path.Combine(approvedRoot, "source.txt");
+        var destination = Path.Combine(approvedRoot, "destination.txt");
+        File.WriteAllText(source, "anchored approved source");
+
+        var approved = WindowsNoReplaceMovePrototype.CaptureApprovalForTest(
+            source, destination, approvedRoot, "nt-root-ancestor-lock-1");
+
+        var relocationBlocked = false;
+        WindowsNoReplaceMovePrototype.MoveFileForTest(
+            source, destination,
+            beforeNativeRename: () =>
+            {
+                try
+                {
+                    Directory.Move(sandbox, relocatedSandbox);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    relocationBlocked = true;
+                }
+            },
+            approved: approved, operationId: "nt-root-ancestor-lock-1",
+            useNativeRelativeMoveForTest: true);
+
+        Require(relocationBlocked, "the parent of the allowed root must remain anchored");
+        Require(!Directory.Exists(relocatedSandbox), "approved root ancestor not relocated");
+        Require(!File.Exists(source), "the authorized source was moved");
+        Equal("anchored approved source", File.ReadAllText(destination),
+            "authorized destination remains in place");
+    }
+    finally
+    {
+        if (Directory.Exists(relocatedSandbox) && !Directory.Exists(sandbox))
+        {
+            Directory.Move(relocatedSandbox, sandbox);
+        }
+        if (Directory.Exists(sandbox))
+        {
+            Directory.Delete(sandbox, recursive: true);
+        }
+    }
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
