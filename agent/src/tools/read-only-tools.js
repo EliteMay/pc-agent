@@ -1,3 +1,4 @@
+import { createCaptureNotepadTool } from "./capture-notepad.js";
 import { createFindPathsTool } from "./find-paths.js";
 import { createListDirectoryTool } from "./list-directory.js";
 import { createPingTool } from "./ping.js";
@@ -19,6 +20,7 @@ export function registerReadOnlyTools(registry, options = {}) {
   }
 
   registry.register(createPingTool());
+  registry.register(createCaptureNotepadTool());
   registry.register(createSystemInfoTool());
   registry.register(createListDirectoryTool({
     allowedRoots: [...allowedRoots],
