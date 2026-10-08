@@ -1362,6 +1362,180 @@ Run("NT move prevents an ancestor above the approved root from being relocated",
     }
 });
 
+
+Run("Local move approval ticket authenticates and can only be consumed once", () =>
+{
+    var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+    using var issuer = new LocalMoveApprovalTicketPrototype(
+        Enumerable.Repeat((byte)0x42, 32).ToArray());
+
+    var request = new LocalMoveApprovalTicketPrototype.MoveRequest(
+        "command-1",
+        "device-1",
+        "operation-1",
+        @"C:\Workspace\from.txt",
+        @"C:\Workspace\to.txt",
+        @"C:\Workspace",
+        new string('a', 64));
+
+    var ticket = issuer.IssueApprovedForTest(request, now);
+    issuer.ConsumeForTest(ticket, request, now.AddSeconds(1));
+
+    var replayRejected = false;
+    try
+    {
+        issuer.ConsumeForTest(ticket, request, now.AddSeconds(2));
+    }
+    catch (InvalidOperationException)
+    {
+        replayRejected = true;
+    }
+
+    Require(replayRejected, "consumed approval cannot be replayed");
+    var freshTicket = issuer.IssueApprovedForTest(request, now.AddSeconds(3));
+    var freshNonceSameOperationRejected = false;
+    try
+    {
+        issuer.ConsumeForTest(freshTicket, request, now.AddSeconds(4));
+    }
+    catch (InvalidOperationException)
+    {
+        freshNonceSameOperationRejected = true;
+    }
+    Require(freshNonceSameOperationRejected,
+        "minting a new nonce must not authorize reusing the same operation ID");
+});
+
+Run("Local move ticket rejects tampering and a mismatched execution request", () =>
+{
+    var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+    using var issuer = new LocalMoveApprovalTicketPrototype(
+        Enumerable.Repeat((byte)0x7d, 32).ToArray());
+
+    var request = new LocalMoveApprovalTicketPrototype.MoveRequest(
+        "command-2",
+        "device-2",
+        "operation-2",
+        @"D:\Approved\from.txt",
+        @"D:\Approved\to.txt",
+        @"D:\Approved",
+        new string('b', 64));
+
+    var ticket = issuer.IssueApprovedForTest(request, now);
+    var mutatedBytes = (byte[])ticket.PayloadUtf8.Clone();
+    mutatedBytes[mutatedBytes.Length / 2] ^= 0x01;
+    var tampered = new LocalMoveApprovalTicketPrototype.SignedTicket(
+        mutatedBytes, ticket.HmacSha256);
+
+    var tamperRejected = false;
+    try
+    {
+        issuer.ConsumeForTest(tampered, request, now.AddSeconds(1));
+    }
+    catch (InvalidOperationException)
+    {
+        tamperRejected = true;
+    }
+    Require(tamperRejected, "modified payload must fail HMAC check");
+
+    foreach (var wrong in new[]
+    {
+        request with { CommandId = "other-command" },
+        request with { DeviceId = "other-device" },
+        request with { OperationId = "other-operation" },
+        request with { SourcePath = @"D:\Approved\other.txt" },
+        request with { DestinationPath = @"D:\Approved\different.txt" },
+        request with { AllowedRootPath = @"D:\Other" },
+        request with { SourceSha256 = new string('c', 64) }
+    })
+    {
+        var mismatchRejected = false;
+        try
+        {
+            issuer.ConsumeForTest(ticket, wrong, now.AddSeconds(1));
+        }
+        catch (InvalidOperationException)
+        {
+            mismatchRejected = true;
+        }
+        Require(mismatchRejected, "mismatched operation context must be rejected");
+    }
+
+    // Failed verification does not consume a valid approval.
+    issuer.ConsumeForTest(ticket, request, now.AddSeconds(1));
+});
+
+Run("Local move ticket enforces two-minute expiry, future issuance and its secret", () =>
+{
+    var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+    var request = new LocalMoveApprovalTicketPrototype.MoveRequest(
+        "command-3", "device-3", "operation-3",
+        @"D:\Sandbox\source.txt", @"D:\Sandbox\destination.txt", @"D:\Sandbox",
+        new string('d', 64));
+
+    using var first = new LocalMoveApprovalTicketPrototype(
+        Enumerable.Repeat((byte)0x11, 32).ToArray());
+    using var differentKey = new LocalMoveApprovalTicketPrototype(
+        Enumerable.Repeat((byte)0x12, 32).ToArray());
+
+    var ticket = first.IssueApprovedForTest(request, now);
+
+    foreach (var consume in new Action[]
+    {
+        () => first.ConsumeForTest(ticket, request, now.AddSeconds(-1)),
+        () => first.ConsumeForTest(ticket, request, now.AddMinutes(3)),
+        () => differentKey.ConsumeForTest(ticket, request, now.AddSeconds(5))
+    })
+    {
+        var rejected = false;
+        try
+        {
+            consume();
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+        Require(rejected, "invalid time or different secret must deny the grant");
+    }
+
+    first.ConsumeForTest(ticket, request, now.AddSeconds(10));
+});
+
+Run("Local move ticket rejects oversized or malformed ticket data", () =>
+{
+    var now = DateTimeOffset.Parse("2026-10-08T02:00:00Z");
+    using var service = new LocalMoveApprovalTicketPrototype(
+        Enumerable.Repeat((byte)0x20, 32).ToArray());
+    var request = new LocalMoveApprovalTicketPrototype.MoveRequest(
+        "command-4", "device-4", "operation-4",
+        @"D:\Sandbox\from.txt", @"D:\Sandbox\to.txt", @"D:\Sandbox",
+        new string('e', 64));
+
+    var tickets = new[]
+    {
+        new LocalMoveApprovalTicketPrototype.SignedTicket(new byte[9000], new byte[32]),
+        new LocalMoveApprovalTicketPrototype.SignedTicket(new byte[] { 0x41 }, new byte[0])
+    };
+
+    foreach (var ticket in tickets)
+    {
+        var rejected = false;
+        try
+        {
+            service.ConsumeForTest(ticket, request, now);
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+        Require(rejected, "malformed tickets must be refused");
+    }
+
+    var issued = service.IssueApprovedForTest(request, now);
+    service.ConsumeForTest(issued, request, now);
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine();
