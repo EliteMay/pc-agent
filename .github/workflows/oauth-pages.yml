@@ -52,3 +52,27 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Verify live OAuth pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://elitemay.github.io/pc-agent"
+          for entry in "|Kaito PC Agent" "/oauth/login/|OAuthログイン" "/oauth/consent/|Kaito PC Agentへの接続を許可"; do
+            path="${entry%%|*}"
+            expected="${entry#*|}"
+            url="${base}${path}"
+            valid=0
+            for attempt in $(seq 1 12); do
+              if curl --fail --location --silent --show-error --max-time 20 "${url}" -o response.html && grep -Fq "${expected}" response.html; then
+                echo "Verified live page: ${url}"
+                valid=1
+                break
+              fi
+              echo "Retrying live page ${url} (attempt ${attempt}/12)"
+              sleep 5
+            done
+            if [ "${valid}" -ne 1 ]; then
+              echo "::error::Page did not return expected content: ${url}"
+              exit 1
+            fi
+          done
