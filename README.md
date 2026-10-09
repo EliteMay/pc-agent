@@ -97,13 +97,15 @@ Filesystem access must use the canonical path guards, not the lexical helper alo
 See `docs/superpowers/specs/2026-10-07-pc-agent-design.md` for the system design.
 
 
-## OAuth Web UI (移行中)
+## OAuth Web UI
 
-旧 `EliteMay/site-min/oauth/` にあったログイン画面・OAuth同意画面のコードは、`web/oauth/` に移管します。
-公開対象は GitHub Actions の Pages artifact に含まれる `web/` のみです。実行権限の判定・OAuthバックエンド・PCの操作承認は引き続きSupabase GatewayおよびローカルAgent/Managerが担当します。
+`EliteMay/site-min` にあったOAuthログイン・同意画面の**認証処理本体**は `web/oauth/` に移行済みです。
 
-新しい配信予定URL:
-- `https://elitemay.github.io/pc-agent/oauth/login/`
-- `https://elitemay.github.io/pc-agent/oauth/consent/`
+- ログイン画面: https://elitemay.github.io/pc-agent/oauth/login/
+- 同意画面: https://elitemay.github.io/pc-agent/oauth/consent/
+- GitHub Pages: `.github/workflows/oauth-pages.yml` が `web/` のみ配信
+- 本番公開: GitHub Actions run [#37891970444](https://github.com/EliteMay/pc-agent/actions/runs/37891970444) 成功。HTMLは [#37893310717](https://github.com/EliteMay/pc-agent/actions/runs/37893310717) で取得確認済み
 
-**重要:** GitHub Pagesのデプロイ成功、公開URLでの画面確認、Supabase AuthのSite URL/Authorization Pathと他アプリへの影響確認、実OAuth認証成功が済むまでは、旧 `site-min` のOAuth画面を削除しません。認証先の切替・ロールバック手順は [`docs/oauth-ui-migration.md`](docs/oauth-ui-migration.md) を参照してください。
+旧 `site-min/oauth/login/` と `oauth/consent/` は、クエリを保持してこのリポジトリへ転送する**互換ページ**に変更済み（[site-min PR #2](https://github.com/EliteMay/site-min/pull/2)）。旧サイトにログインや同意処理は残りません。
+
+**未完了:** SupabaseのSite URL / Authorization Pathの実設定確認と、実際のOAuth許可/拒否のE2E検証。設定は変更していません。互換URLは認証が確実に切り替わるまで残します。詳細は [`docs/oauth-ui-migration.md`](docs/oauth-ui-migration.md) と [Issue #39](https://github.com/EliteMay/pc-agent/issues/39)。
