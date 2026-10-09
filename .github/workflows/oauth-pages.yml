@@ -26,6 +26,27 @@ jobs:
           node-version: '22'
       - name: Test OAuth static frontend
         run: node --test tests/oauth-pages.test.mjs
+      - name: Check live published Pages (read-only)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://elitemay.github.io/pc-agent"
+          for entry in "|Kaito PC Agent" "/oauth/login/|OAuthログイン" "/oauth/consent/|Kaito PC Agentへの接続を許可"; do
+            path="${entry%%|*}"
+            expected="${entry#*|}"
+            url="${base}${path}"
+            valid=0
+            for attempt in $(seq 1 6); do
+              if curl --fail --location --silent --show-error --max-time 15 "${url}" -o response.html && grep -Fq "${expected}" response.html; then
+                echo "Live page verified: ${url}"
+                valid=1
+                break
+              fi
+              sleep 3
+            done
+            test "${valid}" -eq 1 || { echo "::error::Failed verifying ${url}"; exit 1; }
+          done
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
