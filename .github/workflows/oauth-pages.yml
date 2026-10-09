@@ -1,0 +1,54 @@
+name: OAuth Pages
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'tests/oauth-pages.test.mjs'
+      - '.github/workflows/oauth-pages.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'tests/oauth-pages.test.mjs'
+      - '.github/workflows/oauth-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test OAuth static frontend
+        run: node --test tests/oauth-pages.test.mjs
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: oauth-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload only OAuth frontend
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

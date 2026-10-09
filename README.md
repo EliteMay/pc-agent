@@ -29,6 +29,7 @@ The Agent is the final authorization boundary. The Manager supervises the Agent 
 - `manager/` — C#/.NET production supervisor and Windows UI.
 - `protocol/` — shared command and IPC protocol documentation.
 - `docs/` — architecture and security specifications.
+- `web/` — PC Agent OAuth login/consent frontend for GitHub Pages (no PC-command execution or server secrets).
 - `tests/` — cross-component tests as they are added.
 
 ## Current implementation
@@ -94,3 +95,15 @@ Filesystem writes are now limited to the three v0.4 safe-write tools and require
 Filesystem access must use the canonical path guards, not the lexical helper alone. For new files, callers must resolve the nearest existing parent and call write-time revalidation immediately before creating or replacing the file. Write tools remain restricted to configured allowed roots, deny sensitive paths, and are gated by explicit local approval. Existing-file replacement additionally requires the caller to provide the current SHA-256 hash.
 
 See `docs/superpowers/specs/2026-10-07-pc-agent-design.md` for the system design.
+
+
+## OAuth Web UI (移行中)
+
+旧 `EliteMay/site-min/oauth/` にあったログイン画面・OAuth同意画面のコードは、`web/oauth/` に移管します。
+公開対象は GitHub Actions の Pages artifact に含まれる `web/` のみです。実行権限の判定・OAuthバックエンド・PCの操作承認は引き続きSupabase GatewayおよびローカルAgent/Managerが担当します。
+
+新しい配信予定URL:
+- `https://elitemay.github.io/pc-agent/oauth/login/`
+- `https://elitemay.github.io/pc-agent/oauth/consent/`
+
+**重要:** GitHub Pagesのデプロイ成功、公開URLでの画面確認、Supabase AuthのSite URL/Authorization Pathと他アプリへの影響確認、実OAuth認証成功が済むまでは、旧 `site-min` のOAuth画面を削除しません。認証先の切替・ロールバック手順は [`docs/oauth-ui-migration.md`](docs/oauth-ui-migration.md) を参照してください。
