@@ -36,4 +36,11 @@
 4. 合格後の別許可でSupabase redirect追加とSites正式統合。保存版2pendingの暗号文内にraw stateを追加し、本人/ブラウザから安全に復元する。新旧callback URI、token交換redirect一致、4Secrets、固定probeを維持して再テスト・本人レビュー。
 5. 本番deploy・本人OAuth同意・認証済み`gateway_probe`は未許可のまま。Windows操作はこのrelayの対象外。
 
-詳細と公式根拠は[モジュールREADME](../gateway/cloudflare-callback-relay/README.md)へ集約。feature branch `feat/issue-29-cloudflare-relay-dummy`、mainへのmergeなし。
+詳細と公式根拠は[モジュールREADME](../gateway/cloudflare-callback-relay/README.md)へ集約。
+
+## GitHub保存とCI
+
+- Draft [PR #42](https://github.com/EliteMay/pc-agent/pull/42)、branch `feat/issue-29-cloudflare-relay-dummy`。mainへのmergeなし。
+- 実装commit `2f614cee900cdbad123ac26bdb8b0282ed28f15c`。追加19 filesのblobとbase既存108 filesをremote treeで照合し、一致/既存変更なし。
+- 実装commitの[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/38080984741) **success**、[既存Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/38080984742) **success**。
+- Agent/Manager全体のテストは今回のmodule変更の範囲外で、実行済みとはしない。Cloudflare runtimeやログ非保持の検証とは別。

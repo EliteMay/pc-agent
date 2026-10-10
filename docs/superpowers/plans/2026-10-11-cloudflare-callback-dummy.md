@@ -55,7 +55,7 @@
 - [x] Test effective settings validator RED: redaction=true, enabled/logs/invocation/persist/traces/exports=false/empty, logpush=false, tail_consumers=[]; absent or enabled fields fail.
 - [x] Implement sanitized validator and no-deploy CI; record Workers/D1 Free limits and upstream-log/backup limitations.
 - [x] Run full new suite, syntax/secret checks and whole-branch security review; fix substantive findings with failing-then-passing tests.
-- [ ] Push exact verified files with native GitHub API, create draft PR, verify remote content and CI, and append outcomes/owner-only next operations to Issue29.
+- [x] Push exact verified files with native GitHub API, create draft PR, verify remote content and CI, and append outcomes/owner-only next operations to Issue29.
 
 ## Rulings / execution ledger
 
@@ -69,9 +69,12 @@
 
 - Task 1: complete. Worker RED: 17 failed/2 passed against fail-closed stub; initial GREEN:19/19. Rollback boundary added and whole suite36/36 PASS.
 - Task 2: complete. Sites RED:7 failed/5 passed against stub; initial combined GREEN:31/31. Original unchanged saved2 tests20/20 PASS, HEAD63f617624ef192bc397e0b875eda5593bc3ac854, clean.
-- Task 3: logging validator RED:1 failed/3 passed, then full GREEN36/36. Syntax/static checks11 modules PASS. Native GitHub publication and CI confirmation pending.
+- Task 3: logging validator RED:1 failed/3 passed, then full GREEN36/36. Syntax/static checks11 modules PASS. Native GitHub commit2f614cee900cdbad123ac26bdb8b0282ed28f15c and DraftPR42 verified; Callback relay dummy CI38080984741 and Gateway CI38080984742 success. Issue29 completion record is written after final report commit.
 - Final review: fresh independent reviewer found no dummy-only blocker; tests36/36 and check11 modules independently PASS. D1 runtime, platform logging, CPU/quota and production Sites integration explicitly unverified.
 - Final: minor (deferred): fixed-window limits allow boundary bursts; semantics documented; rolling-window policy to be decided before live integration. Cost if left unresolved: prepare10/claim40 can occur across a boundary, so rates cannot be described as rolling ceilings.
 - Ruling: isolated source projection + native Git data API used instead of a full local git worktree — network supports the GitHub connector and exact base-tree CAS — cost if wrong: full-repository CI may find integration problems; no main merge/deploy occurs.
 - Ruling: per-task intermediate commits consolidated into one verified feature commit — preserves canonical base tree and keeps untested partial sources off the remote feature branch — cost if wrong: coarser bisect granularity.
 - Durable coordination guard verified on data coordination/ws-20261010-issue29relay before publishing implementation; current canonical Data main and feature base lease must still match before mutation.
+
+- Task 3: complete at implementation commit2f614cee900cdbad123ac26bdb8b0282ed28f15c; DraftPR42; module CI and existing Gateway typecheck CI success. Report-only follow-up records this evidence.
+- Ruling: use reversible feature branch + Draft PR as the completion path — user explicitly requests batched safe development and Issue29 evidence, and developer permits draft PRs without repeated permission — cost if wrong: additional review surface only; main, production and accounts remain unchanged.
