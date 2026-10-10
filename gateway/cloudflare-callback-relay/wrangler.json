@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kaito-oauth-callback-relay-dummy",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-10-10",
+  "workers_dev": true,
+  "preview_urls": false,
+  "send_metrics": false,
+  "logpush": false,
+  "tail_consumers": [],
+  "observability": {
+    "enabled": false,
+    "redact_query_string": true,
+    "logs": { "enabled": false, "invocation_logs": false, "persist": false, "destinations": [] },
+    "traces": { "enabled": false, "persist": false, "destinations": [] }
+  },
+  "vars": { "RELAY_MODE": "dummy", "RELAY_ORIGIN": "https://relay.example.invalid" },
+  "d1_databases": [{
+    "binding": "DB", "database_name": "kaito-oauth-callback-relay-dummy",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "triggers": { "crons": ["* * * * *"] }
+}
