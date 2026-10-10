@@ -1,0 +1,26 @@
+name: Callback relay dummy CI
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths: ['gateway/cloudflare-callback-relay/**', '.github/workflows/callback-relay-ci.yml']
+  pull_request:
+    paths: ['gateway/cloudflare-callback-relay/**', '.github/workflows/callback-relay-ci.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  dummy-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: gateway/cloudflare-callback-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm test
+      - run: npm run check
