@@ -172,3 +172,15 @@ test('failure while clearing ciphertext rolls back the whole claim and nonce tra
   assert.equal(recovered.status,200); assert.equal((await recovered.json()).code,'dummy-code-canary');
   assert.equal(f.DB.rows('relay_pending')[0].envelope,null);
 });
+
+test('every RFC 6749 authorization error becomes the same finite denial; unknown errors are refused', async () => {
+  for (const error of ['invalid_request','unauthorized_client','access_denied','unsupported_response_type','invalid_scope','server_error','temporarily_unavailable']) {
+    const f = await fixture(); await f.prepare();
+    assert.equal((await f.callback(`error=${error}&error_description=dummy-private-description&state=${f.state}`)).status, 303);
+    assert.deepEqual(await (await f.claim()).json(), { outcome: 'denied', state: f.state });
+    assert.ok(!f.DB.dump().includes('dummy-private-description') && !f.DB.dump().includes(error));
+  }
+  const f = await fixture(); await f.prepare();
+  for (const error of ['made_up', 'ACCESS_DENIED', 'access_denied%20x']) assert.equal((await f.callback(`error=${error}&state=${f.state}`)).status, 400);
+  assert.equal(f.DB.rows('relay_pending')[0].phase, 'prepared');
+});

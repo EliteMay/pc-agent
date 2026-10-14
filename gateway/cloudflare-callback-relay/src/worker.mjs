@@ -1,4 +1,4 @@
-import { RelayError, RETURN_URL, ISSUER, opaque, dummyCode, plainObject, keyBytes,
+import { RelayError, RETURN_URL, ISSUER, OAUTH_ERRORS, opaque, dummyCode, plainObject, keyBytes,
   relayOrigin, authenticatedBody, sha, seal, open, safeHeaders, safeJson, safeError } from './protocol.mjs';
 import { createStore } from './store.mjs';
 
@@ -13,7 +13,7 @@ function callbackPayload(url) {
   const q=url.searchParams;
   for(const key of q.keys()) if(!['code','state','error','error_description','iss'].includes(key)||q.getAll(key).length!==1) throw new RelayError('invalid_input');
   const state=q.get('state'); if(!opaque(state)||q.has('code')===q.has('error')||q.has('iss')&&q.get('iss')!==ISSUER) throw new RelayError('invalid_input');
-  if(q.has('error')) { if(q.get('error')!=='access_denied') throw new RelayError('invalid_input'); return {outcome:'denied',state}; }
+  if(q.has('error')) { if(!OAUTH_ERRORS.has(q.get('error'))) throw new RelayError('invalid_input'); return {outcome:'denied',state}; }
   const code=q.get('code'); if(!dummyCode(code)||q.has('error_description')) throw new RelayError('invalid_input');
   return {outcome:'code',code,state};
 }

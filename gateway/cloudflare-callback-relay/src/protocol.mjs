@@ -11,6 +11,11 @@ export const ISSUER='https://vtnwbgejlaqpnwmlzbjy.supabase.co/auth/v1';
 export const TTL=300000;
 export const opaque = x => typeof x==='string' && /^[A-Za-z0-9_-]{43}$/.test(x);
 export const dummyCode = x => typeof x==='string' && /^dummy-code-[A-Za-z0-9._-]{1,160}$/.test(x);
+// Supabase documents the code as single-use and valid for 10 minutes but does not specify its format.
+// For the future live mode accept only an RFC 6749 URL-safe subset, bounded; never used in dummy mode.
+export const oauthCode = x => typeof x==='string' && /^[A-Za-z0-9._~-]{1,512}$/.test(x);
+// RFC 6749 4.1.2.1 authorization-response error codes. Only the finite code is acted on; descriptions are discarded.
+export const OAUTH_ERRORS = new Set(['invalid_request','unauthorized_client','access_denied','unsupported_response_type','invalid_scope','server_error','temporarily_unavailable']);
 export const plainObject = x => x!==null && typeof x==='object' && !Array.isArray(x);
 export function base64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,''); }
 export function bytes(value) {
