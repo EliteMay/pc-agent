@@ -11,4 +11,4 @@ let data;
 try { if (!oversized) data = JSON.parse(text); } catch {}
 const report = inspectLogSettings(data);
 process.stdout.write(JSON.stringify(report) + '\n');
-process.exitCode = report.worker_settings === 'matched' ? 0 : 1;
+process.exitCode = report.worker_settings === 'unverified' ? 1 : 0;

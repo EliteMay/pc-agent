@@ -54,6 +54,20 @@ test('the report contains only fixed labels and booleans, never raw metadata or 
   const data = safe(); data.observability.logs.destinations.push('dummy-code-private-canary');
   const report = inspectLogSettings({ success: true, result: data, errors: [{ message: 'private-canary' }] });
   assert.doesNotMatch(JSON.stringify(report), /private-canary|dummy-code|destinations/);
-  assert.deepEqual(Object.keys(report).sort(), ['checks', 'live_oauth_allowed', 'platform_log_scope', 'worker_settings']);
+  assert.deepEqual(Object.keys(report).sort(), ['checks', 'live_oauth_allowed', 'platform_log_scope', 'redaction', 'worker_settings']);
   assert.ok(Object.values(report.checks).every(x => typeof x === 'boolean'));
+});
+
+test('observability null with logpush off is an observed-disabled state that never claims redaction or platform scope', () => {
+  for (const tail of [null, []]) {
+    const report = inspectLogSettings({ success: true, result: { logpush: false, tail_consumers: tail, observability: null } });
+    assert.equal(report.worker_settings, 'disabled_observed');
+    assert.equal(report.redaction, 'unverified');
+    assert.equal(report.platform_log_scope, 'unverified');
+    assert.equal(report.live_oauth_allowed, false);
+  }
+  for (const result of [{ logpush: false, tail_consumers: [] }, { logpush: true, tail_consumers: [], observability: null },
+    { logpush: false, tail_consumers: [{ service: 'private-canary' }], observability: null }, { tail_consumers: [], observability: null }]) {
+    assert.equal(inspectLogSettings({ success: true, result }).worker_settings, 'unverified');
+  }
 });

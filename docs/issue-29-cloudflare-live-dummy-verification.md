@@ -15,7 +15,7 @@
 - Script Settings GETの`observability`は、`wrangler.json`のdeploy後もJSON PATCH後も **`null`**。`logpush:false`、`tail_consumers`はnull（/settingsでは`[]`）。
 - 検証: `enabled:true`にするとAPIは`persist:true`/`invocation_logs:true`/`redact_query_string:false`の既定を返し、`enabled:false`へ戻すと再び`null`。disabledでは`redact_query_string:true`を送っても**保存されず観測できない**。
 - したがって`inspectLogSettings`の`matched`条件（redact=true等の明示値）は、observability無効のliveでは**原理的に満たせない**。現状`unverified`が正しい出力で、「ログ非保持」の合格根拠にはならない。観測できる事実は「observabilityは無効（null）」のみ。`redact_query_string`の実効値、Cloudflare内部/edgeのログ層は未検証。
-- 対応方針は未決定（nullを「無効を観測」として別状態にするか、redaction前提を外すか）。実OAuth前に本人判断が必要。コードは未変更。
+- 対応（本人判断済み）: `inspectLogSettings`を3状態化。`matched`（明示値が全一致）/`disabled_observed`（`observability:null`かつ`logpush:false`かつtail無し=無効を観測）/`unverified`。`disabled_observed`でも`redaction:"unverified"`、`platform_log_scope:"unverified"`、`live_oauth_allowed:false`は固定。observability項目の欠落（null以外）は`unverified`のまま。liveのdummy Workerは`disabled_observed`と判定される。テスト37件成功。
 - 補足: `wrangler deploy`のconfigにobservabilityを書いても反映されなかった。JSON bodyのPATCH（multipartは400）で明示設定した。
 
 ## ダミー機能のlive結果（workers.dev, 署名付きリクエスト）
