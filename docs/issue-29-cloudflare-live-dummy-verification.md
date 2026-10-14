@@ -40,3 +40,58 @@
 - CPU: 直近の分析（28 requests、errors 0）でp50 約1.8ms、p99 約7.9ms（Free上限10msに近い。sample少）。D1使用量（rows read/written）の集計、10ms超過の負荷試験、無料枠の実測は未実施。
 - 固定窓rate limit（prepare5/10分、claim20/分）は文書化済みのまま。
 - Sites POST bodyログ、Cloudflare非公開ログ、D1 backupは未検証。本番OAuth/Sites統合は引き続き禁止。
+
+---
+
+# 追加検証と判定（2026-10-15 JST、HEAD 11294fa 以降）
+
+web-project-guide v1.22.0（`docs/06-security.md` OAuth節: URL/ログへのToken非露出、callbackの任意転送禁止）に照らして確認。コード変更なし、記録のみ。
+
+## 問題の3分類
+
+### A: 修正しないと次へ進めない問題 — **なし（dummy relay範囲）**
+- 再現した機能不具合・安全不具合はなし（live 5往復 201/303/200、同時claim 1/12、replay・誤binding・期限切れ・署名不正すべて拒否）。
+- ただし**live OAuth統合時の必須作業**として別枠（下記「統合時に必要な変更」）。
+
+### B: リスクを明示して本人が許容判断する問題
+| 項目 | 事実 | 残るリスク / 対策 |
+| --- | --- | --- |
+| 認可コードがCloudflare edge/callback URLを通る | observabilityは無効（API `null`）。`redact_query_string`は無効状態では保存・観測不可。Worker側コードはqueryを保存・出力せず303固定先にqueryを付けない | Cloudflare内部/edgeログ層、ブラウザ履歴にcode付きURLが残り得る。**緩和**: コードは単回・TTL300秒、PKCEのverifierはSites側のみ、Supabase OAuth Appはconfidential（client_secret必須。本人報告。統合時にSupabase設定で再確認）→ code単独では交換不能。 |
+| cron削除遅延 | 当初、期限後10分超で残存（原因不明、schedule新規作成直後の伝播遅延の可能性、未証明）。再計測3回は seed→削除 37/56/56秒（観測間隔・wrangler遅延含む）、`/__scheduled`手動実行でも全削除 | 遅延中も期限切れclaim/callbackは拒否される。ciphertextのみがD1に残る（暗号鍵はWorker Secretのみ）。再デプロイ・Secret更新直後は数分遅れ得る前提で保持期間を「TTL+数分」と扱う。コード変更はしない（原因未特定のため）。 |
+| 無認証/不正リクエスト | 署名なしは401、未知stateのcallbackは409。署名前にD1書込みなし | 無料枠(100k req/day)を攻撃で消費する可用性低下は防げない（rate limitは認証後）。本人用途では許容。 |
+| 固定窓rate limit | prepare5/10分、claim20/分、境界で瞬間倍 | 前記載のまま。 |
+
+### C: プラットフォーム制約で検証できない問題
+- Cloudflare非公開/内部ログ・CDN・Logpush外のログ保持、D1 backup保持期間。
+- `redact_query_string`の実効値（observability無効だとAPIがnullを返し観測不能）。有効化して観測するとログ永続の既定(persist/invocation_logs=true)が付くため**実施せず**。
+- Sites側のPOST response bodyログ（本人限定Siteの正式接続が必要）。
+- Freeプランの機械確認: 本トークンは`/subscriptions`が403。作成できたこと以外は**ダッシュボードでの本人確認が必要**。
+- 「ログ完全非保持」は保証できない。確認できた事実は上記のみ。
+
+## 測定結果（dummy Worker、実環境）
+
+- Workers CPU（110 invocations、errors 0、フル往復5回+軽量リクエスト+cron含む）: p50 1.0ms / p90 2.4ms / p99 4.9ms / p99.9 6.3ms。Free上限10ms未満（先の28件p99 7.9msは標本少・コールド起因と推定）。重い経路(prepare/callback/claim)の個別分離は未実施。
+- D1（同時間帯）: read queries 65 / write queries 46 / rows read 94 / rows written 84 → Free上限（5M read rows/day、100k write rows/day）に対し桁違いに小さい。cron毎分のDELETEは対象行が無ければ書込みなし。
+- Workers requests: cron 1440回/日を含めても100k/日に対し小。
+
+## 設計レビュー結論
+
+重大な設計欠陥は見つからなかった: 署名(HMAC)+nonce永続replay防止+owner/browser binding+AES-GCM(AAD束縛)+原子的単回claim+固定303。Workerは`client_secret`/`service_role`/家PC鍵を持たない。
+
+## 統合時に必要な変更（今回未実施）
+
+1. `dummyCode`正規表現（`dummy-code-…`のみ許可）とclaim検証を、Supabase実コード形式の厳格な検証へ置換（形式は公式仕様で確認してから）。
+2. callbackが`access_denied`以外のerror（`server_error`等）を400にする挙動の扱いを決める。
+3. dummy検証用に生成した署名/暗号鍵は破棄し、本人PCで新規生成して公式UIへ投入（Sites側にも署名鍵）。
+4. `RELAY_MODE`/mode分岐、`RELAY_ORIGIN`をlive用に更新、再デプロイ後にcron削除を再計測。
+5. 統合後もSupabase redirect URIの追加（本人操作）、新旧callback、token交換のredirect_uri一致を維持。
+
+## 判定: **条件付きGO**（Sites OAuth統合の「設計・実装準備」へ進む）
+
+条件:
+1. 本人がB/Cの残留リスク（Cloudflare内部ログ・ブラウザ履歴・Sites POST bodyログの非保証）を、PKCE+confidential client+単回TTL300秒の緩和込みで許容する。
+2. Supabase OAuth Appがconfidentialでclient_secretが必須であることを統合前に本人が設定画面で確認する。
+3. Freeプランをダッシュボードで本人確認する。
+4. 実OAuth同意・Supabase redirect追加・Sites本番再公開は、統合実装とdummy→liveの再テスト後に個別承認。
+
+NO-GOとする条件: 許容できない場合、またはconfidential client/PKCEが成立しない場合。この場合は本番認可コードを発行しない。
