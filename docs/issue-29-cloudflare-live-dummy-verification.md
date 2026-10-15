@@ -95,3 +95,35 @@ web-project-guide v1.22.0（`docs/06-security.md` OAuth節: URL/ログへのToke
 4. 実OAuth同意・Supabase redirect追加・Sites本番再公開は、統合実装とdummy→liveの再テスト後に個別承認。
 
 NO-GOとする条件: 許容できない場合、またはconfidential client/PKCEが成立しない場合。この場合は本番認可コードを発行しない。
+
+---
+
+# 統合準備（2026-10-15 JST、本人が残留ログリスクを許容）
+
+本人判断: 残留ログリスク（B/C）を、PKCE + confidential client + 単回・TTL300秒の緩和込みで許容。条件2（confidential client）・条件3（Freeプラン）の本人確認、および実OAuth/redirect追加/Sites本番再公開の個別承認は引き続き未了。
+
+## Supabase公式仕様の確認（oauth-flows）
+
+- 認可コード: 単回使用、有効10分。**形式（長さ・文字種・接頭辞）は公式に未規定**。
+- 成功callback: `code`, `state`。`iss`の記載なし（Workerは`iss`があれば固定issuerのみ許可、無くても可 — 変更なし）。
+- エラーcallback: `error`（例 `access_denied`/`invalid_request`/`server_error`）、`error_description`、`state`。
+- よって「実コード形式の厳格検証」は形式が公式未規定のため不可能。**確認できた事実の範囲で有界・URL-safeな許可リストを採用**し、形式を推測で固定しない。
+
+## 実装（コミット ae9fa08、dummy modeの挙動は維持）
+
+- `oauthCode`（`^[A-Za-z0-9._~-]{1,512}$`）を追加。**liveモード用の準備で、dummyのWorker/Sitesクライアントでは未使用**（`dummyCode`のまま）。liveモード自体は未実装・未有効化。
+- callbackのerrorは、RFC 6749 §4.1.2.1の7コード（`invalid_request`/`unauthorized_client`/`access_denied`/`unsupported_response_type`/`invalid_scope`/`server_error`/`temporarily_unavailable`）をすべて同一の有限な`denied`として引き渡す（`error`値・`error_description`は保存/返却しない）。未知のerror値は従来どおり400で、登録は`prepared`のまま。
+- テスト: 41/41（追加5: oauthCode 3、error網羅 1、他1）、`npm run check` 12モジュール成功。CI（Callback relay dummy CI / Gateway CI）はae9fa08でsuccess。
+
+## 再デプロイ後のlive確認（dummy Worker）
+
+- `server_error`のcallback → 303、claim → `{outcome:denied,state}`、未知error → 400。通常のcode経路は維持。
+- 再デプロイ後のcron削除遅延: seed→削除 36/56/67秒（初回の10分超遅延は再現せず。新規schedule作成直後の伝播遅延の可能性があるが未証明）。
+- 検証用署名鍵はテスト後に削除。Worker側のdummy鍵はlive統合前に破棄・再生成。
+
+## 次に必要な作業（残り）
+
+1. 本人: Supabase OAuth Appがconfidentialでclient_secret必須であることを確認、Freeプランをダッシュボードで確認。
+2. liveモード設計: `RELAY_MODE=live`でcode検証を`oauthCode`に切替え、レスポンスの`mode`ラベル・Sites側の`mode==='dummy'`固定を一般化。新鍵（本人PCで生成、公式UIへ投入）。
+3. Sites保存版2へのpending暗号文にraw state追加、`/oauth/start`・`/connect/complete`統合、token交換のredirect_uri一致を維持。
+4. 本人承認後にSupabase redirect URIへWorker callbackを追加し、実OAuth同意を1回だけ行う。
