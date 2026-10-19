@@ -97,6 +97,24 @@ test('expiry rejects claim immediately and scheduled cleanup deletes all expired
   f.advance(100000); await f.worker.scheduled({}, f.env); assert.equal(f.DB.rows('relay_nonces').length, 0);
 });
 
+test('Cron cleanup failure rejects with a fixed safe error instead of reporting success', async () => {
+  const f = await fixture(); await f.prepare(); await f.callback();
+  f.advance(300000);
+  const before = f.DB.rows('relay_pending').length;
+  const batch = f.env.DB.batch;
+  f.env.DB.batch = async () => { throw new Error('dummy-private-D1-query-and-ciphertext'); };
+  await assert.rejects(f.worker.scheduled({}, f.env), error => {
+    assert.equal(error.message, 'relay_cleanup_failed');
+    assert.doesNotMatch(String(error), /dummy-private-D1-query-and-ciphertext/);
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  assert.equal(f.DB.rows('relay_pending').length, before);
+  f.env.DB.batch = batch;
+  await assert.doesNotReject(f.worker.scheduled({}, f.env));
+  assert.equal(f.DB.rows('relay_pending').length, 0);
+});
+
 test('consent denial discards error_description and hands off only a finite denial', async () => {
   const f = await fixture(); await f.prepare();
   assert.equal((await f.callback(`error=access_denied&error_description=dummy-private-description&state=${f.state}&iss=${encodeURIComponent(ISSUER)}`)).status, 303);
