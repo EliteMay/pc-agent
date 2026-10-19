@@ -48,7 +48,14 @@ export function createWorker({clock=Date.now}={}) {
   }
   return {
     async fetch(request,env) { try { return await route(request,env); } catch(error) { return safeError(error); } },
-    async scheduled(_event,env) { try { await createStore(env.DB).cleanup(clock()); return {cleanup_completed:true}; } catch { return {cleanup_completed:false}; } },
+    async scheduled(_event,env) {
+      try { await createStore(env.DB).cleanup(clock()); }
+      catch {
+        // Do not report a successful Cron invocation when D1 cleanup failed.
+        // Never include raw D1 errors, query data or secrets in the exception.
+        throw new Error('relay_cleanup_failed');
+      }
+    },
   };
 }
 export default createWorker();
