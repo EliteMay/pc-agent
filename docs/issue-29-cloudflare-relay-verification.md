@@ -96,3 +96,11 @@
 - 実装commitの[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/38080984741) **success**、[既存Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/38080984742) **success**。
 - Agent/Manager全体のテストは今回のmodule変更の範囲外で、実行済みとはしない。Cloudflare runtimeやログ非保持の検証とは別。
 - 2026-10-19の修正後HEAD `5f6e38270e970323af0049256f511432f9a0953f`で、[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/39268885022) は **42/42テスト成功**、12 modules構文・安全性チェック成功。Cron失敗例外テストの実行もジョブログで確認。既存[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39268884638)の型チェックも成功。すべてGitHub CIであり、Cloudflareへは未デプロイ。
+
+## 2026-10-19 安全なデプロイ・ロールバック準備（クラウド変更なし）
+
+- [安全な更新手順](issue-29-cloudflare-deploy-runbook.md) を追加。CloudflareのVersion uploadと本番配信切替を区別し、旧Version ID・Bindings・Vars・Secrets名・Cron・ログ設定・Free利用量を更新前後で確認する。コードrollbackはD1を自動復旧しない。
+- `tools/deploy-preflight.mjs` と`tests/deploy-preflight.test.mjs` を追加。ローカルの非公開候補configと、本人が公式UI/APIで取得した1時間以内のbaselineの整合性を検査。公開`wrangler.json`のダミーOrigin/D1 IDを拒否し、RELAY_MODE/live、余分なVars/Routes、Cron異常、Logs有効化、`keep_vars`未設定、Secret名異常、旧Version ID欠落、Free以外、baseline期限切れをfail closedにする。
+- 検査は**完全にローカル**。API Token/secret値を取得・表示せず、`passed_offline_only`でも`remote_state_authenticated=false`、`deploy_authorized=false`、`live_oauth_allowed=false`のまま。自己申告baselineはCloudflare公式APIの真正性を自動証明しない。
+- 実コードの追加コミット`cdccedd55c14fb17a581f542c0bc154468934d3d`の[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/39272588946) と[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39272588685) success。runbook追加後の[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/39272865076)では **50/50 tests PASS**、構文・安全性チェック16 modules PASS、Wrangler dry-runビルド成功、生成JS SHA256は`8e12a5f90bd2856b038b54bd2e1325f2f658f08478c1cfbfd1dce35d1e71fd32`。既存[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39272864995) success。
+- **Cloudflare WorkerへのVersionアップロード・本番切替・rollbackは未実施**。Cloudflare実行版とPRコードの完全一致、内部ログ、Sites POST body保護、実OAuth/Supabase連携は未検証。本人の正式承認と安全性判断を要する。
