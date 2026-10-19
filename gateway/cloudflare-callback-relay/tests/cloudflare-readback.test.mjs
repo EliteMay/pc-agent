@@ -8,10 +8,10 @@ const api=x=>({success:true,result:x});
 const good=()=>({
  deployments:api({deployments:[{id:dep,versions:[{percentage:100,version_id:id}]}]}),
  version:api({id,resources:{
-   script_runtime:{compatibility_date:'2026-10-10'},
+   script_runtime:{compatibility_date:'2026-10-10T00:00:00Z'},
    script:{handlers:['fetch','scheduled']},
-   bindings:['DB','RELAY_MODE','RELAY_ORIGIN','RELAY_SIGNING_KEY','RELAY_STORAGE_KEY']
-      .map(name=>({name,type:'secret_text',text:'SUPER_SECRET_DO_NOT_PRINT'})),
+   bindings:Object.fromEntries(['DB','RELAY_MODE','RELAY_ORIGIN','RELAY_SIGNING_KEY','RELAY_STORAGE_KEY']
+      .map(name=>[name,{type:'secret_text',text:'SUPER_SECRET_DO_NOT_PRINT'}])),
  }}),
  schedules:api({schedules:[{cron:'* * * * *'}]}),
  scriptSettings:api({observability:null,logpush:false,tail_consumers:[]})
@@ -30,6 +30,25 @@ test('valid metadata projection is narrow, never prints binding values or permit
  assert.doesNotMatch(JSON.stringify(x),/SUPER_SECRET_DO_NOT_PRINT|123e4567/);
 });
 
+test('alternate named binding array and plain date are supported without assuming safety',()=>{
+ const x=good();
+ x.version.result.resources.script_runtime.compatibility_date='2026-10-10';
+ x.version.result.resources.bindings=Object.keys(x.version.result.resources.bindings)
+   .map(name=>({name,type:'secret_text',text:'SUPER_SECRET_DO_NOT_PRINT'}));
+ const p=inspectReadback(x);
+ assert.equal(p.readback,'metadata_consistent');
+ assert.equal(p.deploy_authorized,false);
+});
+
+test('date/time mismatch and unknown binding shape remain unverified',()=>{
+ for(const date of ['2026-10-11','2026-10-10T08:00:00Z','2026-10-10T00:00:00+09:00']) {
+   const x=good();x.version.result.resources.script_runtime.compatibility_date=date;
+   assert.equal(inspectReadback(x).readback,'unverified');
+ }
+ for(const v of [null,[],12]) {const x=good();x.version.result.resources.bindings=v;
+   assert.equal(inspectReadback(x).readback,'unverified');}
+});
+
 test('missing binding names, version mismatch, tail, Cron, logpush, split all fail closed',()=>{
  const edits=[
   x=>x.version.result.id=dep,
@@ -46,7 +65,7 @@ test('missing binding names, version mismatch, tail, Cron, logpush, split all fa
   assert.equal(result.readback,'unverified'); assert.equal(result.live_oauth_allowed,false);}
 });
 
-test('all network operations use four GET requests with version-pinned detail',async()=>{
+test('all network operations use five GET requests with version-pinned detail and stable deployment',async()=>{
  const records=[];const payload=good();
  const mock=async (url,options)=>{
    records.push({url,method:options.method,redirect:options.redirect,cache:options.cache});
@@ -61,10 +80,29 @@ test('all network operations use four GET requests with version-pinned detail',a
  const result=await readCloudflare({accountId,token,fetcher:mock});
  assert.equal(result.readback,'metadata_consistent');
  assert.equal(result.remote_state_authenticated,true);
- assert.equal(records.length,4);
+ assert.equal(records.length,5);
  assert.ok(records.every(x=>x.method==='GET' && x.redirect==='error' && x.cache==='no-store'));
  assert.ok(records[1].url.endsWith('/versions/'+id));
+ assert.equal(records[0].url,records[4].url);
  assert.doesNotMatch(JSON.stringify(result),/READONLY_FAKE_TOKEN_CANARY|SUPER_SECRET/);
+});
+
+test('deployment changing during readback fails without revealing version ids',async()=>{
+ const first=good(),changed=good();changed.deployments.result.deployments[0].id='123e4567-e89b-42d3-a456-426614174099';
+ let seen=0;
+ const out=await readCloudflare({accountId,token,fetcher:async(url)=>{
+   let obj;
+   if(url.endsWith('/deployments'))obj=(++seen===1 ? first : changed).deployments;
+   else if(url.endsWith('/versions/'+id))obj=first.version;
+   else if(url.endsWith('/schedules'))obj=first.schedules;
+   else if(url.endsWith('/script-settings'))obj=first.scriptSettings;
+   else throw Error('unexpected endpoint');
+   return new Response(JSON.stringify(obj),{headers:{'content-type':'application/json'}});
+ }});
+ assert.equal(seen,2);
+ assert.equal(out.readback,'unverified_deployment_changed');
+ assert.equal(out.deploy_authorized,false);
+ assert.doesNotMatch(JSON.stringify(out),/123e4567|READONLY_FAKE/);
 });
 
 test('HTTP failures, malformed account/token and oversized content return fixed labels',async()=>{
