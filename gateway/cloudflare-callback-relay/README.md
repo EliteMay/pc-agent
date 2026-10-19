@@ -60,6 +60,39 @@ node tools/deploy-preflight.mjs <private-wrangler.json> <private-baseline.json>
 
 候補は`keep_vars=true`、現行のWorker名/Origin/D1/Cron/Secrets名、ログ停止の意図、dummy modeと一致しなければfail closedです。baselineは1時間以内のデータに限定します。CLIはCloudflareに接続せず、入力内容や秘密値を出力しません。`passed_offline_only`でもリモート真正性・旧Versionのrollback可否・実コード同一性・本人承認は**未検証**で、`deploy_authorized=false` / `live_oauth_allowed=false`を維持します。
 
+## Cloudflare実効情報の読み取り専用検査（最新Versionを固定して照合）
+
+`tools/cloudflare-readback.mjs`は本人が管理するWorkerの以下の**4つの公式GET API**のみを利用します。コードや設定の更新はできず、デプロイコマンドも実装していません。
+
+1. `GET .../deployments`から現在100%配信のVersion IDを抽出。splitや欠落は停止。
+2. `GET .../versions/{version_id}`で**そのVersionに紐づく**メタデータを確認。対応Version ID、Runtime日時、fetch/scheduled handler、確認可能なBinding**名だけ**検証。
+3. `GET .../schedules`で実効Cronを確認。
+4. `GET .../script-settings`でLogs/Traces設定・Logpush・Tailを確認。
+
+使用時だけ本人PCで一時的な`Workers Scripts Read`トークンを用意し、Nodeプロセスの環境変数`CLOUDFLARE_API_TOKEN`と`CLOUDFLARE_ACCOUNT_ID`から読み込みます。**トークンをコマンド引数、ChatGPT、GitHub、CI、ログ、ファイルに入れないこと。** 既に無効化した前回トークンは再利用できません。トークンは短い有効期限・単一アカウントに限定し、検査後すぐ無効化します。
+
+以下はWindows PowerShellでの安全な入力例です（実行する場合はリポジトリの当該モジュールに移動し、アカウントIDは本人のDashboardから確認して入力）。
+
+```powershell
+$secure = Read-Host "Cloudflare read-only token" -AsSecureString
+$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {
+  $env:CLOUDFLARE_ACCOUNT_ID = "ACCOUNT_ID_FROM_DASHBOARD"
+  $env:CLOUDFLARE_API_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+  node tools/cloudflare-readback.mjs
+} finally {
+  Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:CLOUDFLARE_ACCOUNT_ID -ErrorAction SilentlyContinue
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+}
+```
+
+結果は`readback`、検査名と真偽値、有限ステータスだけです。バージョンID、Binding値、Secret/Token、HTTPエラー本文、取得したJSONを**一切出力・保存しません**。`metadata_consistent`でも`active_version_binary_identity=unverified`、`platform_log_scope=unverified`、`free_plan_verified=false`、`deploy_authorized=false`、`live_oauth_allowed=false`を維持します。Cloudflare APIのBinding情報の形式が不透明／許可不足なら`unverified`のまま扱い、推測で検証済みにしません。
+
+最新Version情報はコンテンツ取得元を固定するための補助証拠であり、**コードのSHA-256と稼働Version IDの暗号学的な同一性証明ではありません**。実Cloudflare接続とログ非保持の保証は別途確認が必要です。
+
+公式仕様: [Deployments API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/list/)、[Versions API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/get/)、[Cron API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/schedules/methods/get/)、[Script Settings API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/settings/methods/get/)。
+
 ## ログ保護の検証条件
 
 `wrangler.json`には`observability.redact_query_string=true`と、observability・invocation logs・logs/traces永続化・destinations・Logpush・tail consumersの無効化を明記しました。Wrangler **4.128.0**でquery redactionが追加されたことを[公式release](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.128.0)で確認済みです。この環境ではWranglerを取得・実行していません。
