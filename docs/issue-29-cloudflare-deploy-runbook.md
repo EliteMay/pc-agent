@@ -91,6 +91,18 @@ node tools/deploy-preflight.mjs "C:\\private\\private-wrangler.json" "C:\\privat
 5. 旧Versionへ戻せることを確認してから、本人が**配信切替を別途承認**した場合にのみ新Versionを配信。事前に記録したIDを必ず指定し、最初のロールアウトを100%かsplitか決める。勝手にトラフィック割合を変えない。
 6. 切替後は同じVersion IDが配信されていること、実効Logs/Traces/Secrets名/Cron/D1バインディング、CPUとエラー、signed prepare→dummy callback→一回限りclaimの順で検証。D1暗号文消去とTTL削除も確認。これらは**実環境検証**であり、CI合格で代用しない。
 
+## 2026-10-20 Cloudflare Dashboardの配信履歴・復元可否の読み取り確認
+
+本人が開いたCloudflare Dashboardの **Settings / Deployments / Rollout history** の可視状態を、ChatGPT Browserのread-only機能で実際に確認した。GitHub上のローカルテストではなくクラウドDashboardの観測だが、認証済みVersion APIのメタデータ比較ではない。
+
+- 対象Worker `kaito-oauth-callback-relay-dummy`、現在の稼働Version表示は **`61aeecd8`**、100%配信。更新履歴のメッセージは「更新されたシークレット: RELAY_SIGNING_KEY」。現在のSettingsには`RELAY_MODE=dummy`、固定`workers.dev` origin、Binding`DB`と既存D1、2つのSecret**名**、Logs/Tracesの親トグルOFF、毎分Cron、runtime compatibility date 2026-10-10 が表示された。Secret**値**は表示も取得もしていない。
+- 一つ前に100%配信されたVersionの表示は **`e8e7d859`**（Wrangler）。さらに`62a1243d`、`7e1016ae`、`30e533df`、`83ef630c`、`b5dceedb`、`7b719f4d`、`1a869030`の100%配信履歴を確認。バージョン名はDashboard上の**先頭8文字**であり、Cloudflare API用の正確な36文字IDではない。
+- Deployment一覧に現在のError Rate 0%、RPS 0、median CPU 1.57msと表示。トラフィックが無い瞬間の値なのでE2E稼働証明とは扱わない。古いVersionが存在しても実行可能なロールバックを保証しない。
+- **重大な未証明点：** 現在版は署名用Secret更新を伴って作成されている。旧版に同じSecret値が有効かは隠されており確認不能。さらに旧版のコード/Binding名・型/D1接続先・Runtime設定・Cronの互換比較は未実施。過去の配信成功は現在のデータとSecretに対する適合証明ではない。
+- **現時点の決定：`e8e7d859`を「安全なロールバック先」として登録しない。** 旧版への復帰操作を実行しない。古いSecretの再投入や値を画面/チャット/GitHubへ転記する試みもしない。
+- 次の最小Read-only Evidenceは、Cloudflare Dashboardで稼働Versionと旧Versionの**個別バージョン詳細**（Secret値は伏せた状態）を確認し、Code/Bindings/Compatibility Date/D1接続先を比較すること。正規の短期`Workers Scripts Read` API資格情報を本人が後で承認した場合だけ、固定Version IDを指定した`GET /versions/{id}`を使う。いずれもSecret等値の同一性の証明にはならない。
+- CodeのrollbackはD1の状態を巻き戻さず、CloudflareのRollbackは即100%配信となるため、将来の実行には別途明示承認が必要。[Cloudflare Workers Version](https://developers.cloudflare.com/workers/versions-and-deployments/) / [Rollback](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/) / [Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。
+
 ## 4. 異常時のコードロールバック（**未許可・現段階では実行禁止**）
 
 - 旧Version IDとそのBindings互換を再確認。別のVersionへ誤ロールバックしない。Cloudflare公式Dashboard > Workers & Pages > 対象Worker > Deployments > **旧VersionのRollback**、または本人が許可した`wrangler rollback <OLD_VERSION_ID> --name kaito-oauth-callback-relay-dummy`を使用。
