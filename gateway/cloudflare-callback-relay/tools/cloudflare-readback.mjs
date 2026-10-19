@@ -25,12 +25,19 @@ export function inspectReadback({ deployments, version, schedules, scriptSetting
   const script = envelope(scriptSettings);
   const logResult = script ? inspectLogSettings(scriptSettings).worker_settings : 'unverified';
   const bindings = versionResult?.resources?.bindings;
-  const names = Array.isArray(bindings) && bindings.every(x => obj(x) && typeof x.name === 'string')
-    ? bindings.map(x => x.name) : null;
+  // Cloudflare's Version API documents resources.bindings as an object;
+  // older/alternate responses may expose an array of named entries.
+  // Unknown formats remain unverified rather than presumed absent.
+  const names = Array.isArray(bindings)
+    ? bindings.every(x => obj(x) && typeof x.name === 'string') ? bindings.map(x => x.name) : null
+    : obj(bindings) ? Object.keys(bindings) : null;
+  const date = versionResult?.resources?.script_runtime?.compatibility_date;
+  const expectedDate = date === '2026-10-10' ||
+    /^2026-10-10T00:00:00(?:\\.0+)?Z$/.test(date ?? '');
   const checks = {
     active_single_version: single && uuid(activeId) && uuid(active?.id),
     version_detail_matches_active: uuid(activeId) && versionResult?.id === activeId,
-    runtime_date_matches_expected: versionResult?.resources?.script_runtime?.compatibility_date === '2026-10-10',
+    runtime_date_matches_expected: expectedDate,
     expected_handlers: Array.isArray(versionResult?.resources?.script?.handlers) &&
       versionResult.resources.script.handlers.includes('fetch') &&
       versionResult.resources.script.handlers.includes('scheduled'),
@@ -103,6 +110,15 @@ export async function readCloudflare({accountId, token, fetcher=fetch}) {
       getJSON(fetcher,prefix+'/schedules',token),
       getJSON(fetcher,prefix+'/script-settings',token),
     ]);
+    // Re-read deployments to avoid accepting an outdated rollout observed
+    // before the other requests. Never mistake local timing for a guarantee.
+    const after = await getJSON(fetcher, prefix + '/deployments', token);
+    const afterActive = envelope(after)?.deployments?.[0];
+    const stable = afterActive?.id === current?.id &&
+      Array.isArray(afterActive?.versions) && afterActive.versions.length === 1 &&
+      afterActive.versions[0]?.percentage === 100 &&
+      afterActive.versions[0]?.version_id === versionId;
+    if (!stable) return {...readFail(), readback:'unverified_deployment_changed'};
     const report = inspectReadback({deployments,version,schedules,scriptSettings});
     return {...report, remote_state_authenticated:true, all_requests_get_only:true};
   } catch {
