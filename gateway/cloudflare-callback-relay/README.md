@@ -48,6 +48,18 @@ node tools/artifact-identity.mjs compare-files <build-js> <cloudflare-js>
 
 参考: [Cloudflare Bundling](https://developers.cloudflare.com/workers/wrangler/bundling/) / [Wrangler dry-run](https://developers.cloudflare.com/workers/wrangler/commands/workers/) / [Worker Script Content](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/content/methods/get/)。
 
+## 既存Cloudflare Workerを上書きしない更新準備
+
+現在の運用手順は [安全な更新・ロールバック手順](../../docs/issue-29-cloudflare-deploy-runbook.md) が正本です。現在のWorkerに対する実デプロイ・バージョンアップロードは**未許可**です。Cloudflare公式のVersions/Deploymentsで新Versionのアップロードと配信切替を分け、旧Version IDを保全し、D1復旧がコードロールバックと別であることを確認します。
+
+手元の**非公開**候補configと、Cloudflare公式UI/APIで直前に観測した必要最小限のbaselineを使うオフライン検査のみ追加しています。ダミーorigin・D1ゼロUUIDを含む公開`wrangler.json`は通しません。
+
+```sh
+node tools/deploy-preflight.mjs <private-wrangler.json> <private-baseline.json>
+```
+
+候補は`keep_vars=true`、現行のWorker名/Origin/D1/Cron/Secrets名、ログ停止の意図、dummy modeと一致しなければfail closedです。baselineは1時間以内のデータに限定します。CLIはCloudflareに接続せず、入力内容や秘密値を出力しません。`passed_offline_only`でもリモート真正性・旧Versionのrollback可否・実コード同一性・本人承認は**未検証**で、`deploy_authorized=false` / `live_oauth_allowed=false`を維持します。
+
 ## ログ保護の検証条件
 
 `wrangler.json`には`observability.redact_query_string=true`と、observability・invocation logs・logs/traces永続化・destinations・Logpush・tail consumersの無効化を明記しました。Wrangler **4.128.0**でquery redactionが追加されたことを[公式release](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.128.0)で確認済みです。この環境ではWranglerを取得・実行していません。
