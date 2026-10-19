@@ -38,6 +38,28 @@
 
 詳細と公式根拠は[モジュールREADME](../gateway/cloudflare-callback-relay/README.md)へ集約。
 
+## 2026-10-19 実環境追跡（ユーザー提示の実行結果）
+
+**検証したものと未検証のものを区別する。** 以下は本人から提供されたPowerShell出力・Cloudflare管理画面の観測であり、本セッションのAIによるCloudflare API直接検査・デプロイ作業ではない。
+
+| 対象 | 実環境の観測 | 限界 |
+| --- | --- | --- |
+| Free環境 | 本人管理Worker/D1、`RELAY_MODE=dummy`、Secret2件、Cron毎分、可視Logs/Traces無効 | 有料リソース未追加、内部の非公開ログは未確認 |
+| ダミーHTTP | signed `prepare` 201、callback 303、固定リダイレクトとquery/body除去、claim 200、再claim 409 | 本物の認可コードでは未検証 |
+| D1 claim | `phase=consumed` 1行で `envelope IS NOT NULL` は0、後日の再SELECTで3アプリケーションテーブルすべて0行 | DBバックアップ/Time Travel上の暗号文消去は保証されない |
+| Cron | 22:21〜22:30の10実行は管理画面で成功表示 | 検証時配置コードはcleanup例外を捕捉しており、成功表示と削除の因果は未証明 |
+| 公式Script Settings API | 読み取り専用トークンでGET成功、`worker_settings=disabled_observed`、`logpushDisabled=true` | `observability:null`では詳細のquery redactionやログ保存層を証明できない |
+| Deployment API | デプロイメント取得成功、単一バージョンが100%配信、version metadata取得成功、`source=dash` | 実行バイナリの同一性は未検証 |
+| Script Content API | `content/v2`成功、JS part1件、参照ソース3/3取得、`EXACT_RUNTIME_FILES=0/3` | デプロイ時結合/変換か内容差異か識別できず、version-pinned取得でもない |
+| APIトークン | 本人から検証用トークンの無効化完了の報告 | 今後の認証付き追加確認は新たな正当な認証経路が必要 |
+
+**残る実OAuth停止条件**:
+1. 現在動作中のScript VersionとGitHubの審査済みビルド成果物の同一性が未証明。未証明を「一致」と言い換えない。将来の承認済み再配置時はローカルのビルド成果物ハッシュ・Deploy版ID・配置後readbackを同じリビジョンへ結び、変換がある場合は再現可能なビルドとArtifact比較を行う。
+2. Cloudflareの非公開プラットフォームログ、Tailの過去利用、Sites側の署名付きPOST本文ログ、D1 Time Travel/バックアップの保持範囲は完全には観測できない。URLに認可コードが来る設計の残余リスクを、実認証を開始する前に本人が判断する。
+3. 将来のlive対応は別変更・別レビュー対象。現行`RELAY_MODE=dummy`のまま、Supabase redirect URI、Sites認証情報や本番Workerへ変更しない。
+
+**追加修正（本PRのコードのみ）:** `scheduled()`がD1 cleanup失敗を捕捉して`{cleanup_completed:false}`を返し、Cloudflare実行履歴が成功し得る問題を修正。失敗時は生のDBエラーを含まない固定`relay_cleanup_failed`例外でCron invocationを失敗させ、成功時は正常終了する回帰テストを追加。**現行Cloudflare配置済みWorkerには未適用**で、旧履歴は遡及して確証にならない。CI結果は該当コミットのGitHub Actionsで別途検証する。
+
 ## GitHub保存とCI
 
 - Draft [PR #42](https://github.com/EliteMay/pc-agent/pull/42)、branch `feat/issue-29-cloudflare-relay-dummy`。mainへのmergeなし。
