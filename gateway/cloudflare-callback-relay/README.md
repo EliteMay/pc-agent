@@ -26,6 +26,28 @@ npm run check
 
 テストは実際のSQLite migration/SQL、Web Crypto、独立したNode HMAC署名を使います。D1 adapterはローカルSQLiteです。Workers runtime、D1 APIでのRETURNING/batch/`changes()`の動作、Freeの10ms CPU制限は未検証です。型チェックやCloudflareビルド成功とは主張しません。CIは同じローカルテストのみでdeployしません。
 
+## 配置コードの同一性検査（デプロイしない）
+
+Cloudflare Dashboardから取得したコードとGitHubの`src/worker.mjs`等の**ソースファイルを直接比較しても**、Wrangler/esbuildによる結合・変換があるため一致証明になりません。今回追加したCIは、**Wrangler 4.128.0を指定してビルドだけ**を行い、結合済みJS partのSHA-256を表示します。Secret/Account IDは不要で、CIにCloudflareの認証情報は与えません。
+
+```sh
+cd gateway/cloudflare-callback-relay
+npx --yes wrangler@4.128.0 deploy --dry-run --outdir .artifact
+node tools/artifact-identity.mjs fingerprint-dir .artifact
+```
+
+`--dry-run`を消して実行しないこと。上記は`wrangler.json`内の意図的なダミーorigin・D1 IDプレースホルダーのまま、**ローカルのコードだけ**をビルドします。`single_part_sha256`はビルドしたJSのSHA-256であり、デプロイ同一性の証明ではありません。比較用にCloudflareのJS partを正当な読み取り専用APIでユーザーPCへ安全に取り出せた場合だけ、秘密情報のない別々のファイルとして次を実行できます。
+
+```sh
+node tools/artifact-identity.mjs compare-files <build-js> <cloudflare-js>
+```
+
+このコマンドはファイルを読み取るだけで、2ファイルのバイト列が異なると終了コード1を返します。秘密情報・本文・パスは出力しません。同一でも`active_deployment_verified=false`、`live_oauth_allowed=false`を固定出力します。
+
+**実稼働バージョンの同一性確認は別ゲート：** 認証済みCloudflare Deployments APIで実行中Version ID・割合を直前/直後に取得し、途中で変更がないことを確認。一般的な`content/v2`読取はVersion固定ではないため、これ単独では「このVersionのバイナリ」と断定しません。現在のDashboard配置版はソース/ビルド手順が未確定なので、PRのビルドSHAと異なっても不正実装の証拠にはなりません。**Cloudflareへの上書き・Wrangler deployは別途本人承認が必要**です。CloudflareのAPI認証情報やWorker SecretをGitHubに登録しません。
+
+参考: [Cloudflare Bundling](https://developers.cloudflare.com/workers/wrangler/bundling/) / [Wrangler dry-run](https://developers.cloudflare.com/workers/wrangler/commands/workers/) / [Worker Script Content](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/content/methods/get/)。
+
 ## ログ保護の検証条件
 
 `wrangler.json`には`observability.redact_query_string=true`と、observability・invocation logs・logs/traces永続化・destinations・Logpush・tail consumersの無効化を明記しました。Wrangler **4.128.0**でquery redactionが追加されたことを[公式release](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.128.0)で確認済みです。この環境ではWranglerを取得・実行していません。
