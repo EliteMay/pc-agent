@@ -104,3 +104,13 @@
 - 検査は**完全にローカル**。API Token/secret値を取得・表示せず、`passed_offline_only`でも`remote_state_authenticated=false`、`deploy_authorized=false`、`live_oauth_allowed=false`のまま。自己申告baselineはCloudflare公式APIの真正性を自動証明しない。
 - 実コードの追加コミット`cdccedd55c14fb17a581f542c0bc154468934d3d`の[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/39272588946) と[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39272588685) success。runbook追加後の[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/39272865076)では **50/50 tests PASS**、構文・安全性チェック16 modules PASS、Wrangler dry-runビルド成功、生成JS SHA256は`8e12a5f90bd2856b038b54bd2e1325f2f658f08478c1cfbfd1dce35d1e71fd32`。既存[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39272864995) success。
 - **Cloudflare WorkerへのVersionアップロード・本番切替・rollbackは未実施**。Cloudflare実行版とPRコードの完全一致、内部ログ、Sites POST body保護、実OAuth/Supabase連携は未検証。本人の正式承認と安全性判断を要する。
+
+## 2026-10-19 追補：Version IDを指定したGET専用Cloudflare監査
+
+- `tools/cloudflare-readback.mjs` を追加。本人がローカルで一時トークンを使う場合だけ、公式 `GET /deployments` → 現行100% Version ID → `GET /versions/{id}`、`GET /schedules`、`GET /script-settings` の4種類のGETを実行する。**Worker更新・ログ変更・D1操作・Token保存はしない**。
+- 出力は固定した真偽値とステータスのみ。APIレスポンス本文、WorkerのBinding値、Token、バージョンID、自由入力例外は表示・保存しない。10秒timeout、256KiB上限、split deployment・invalid response・403はfail closed。
+- 新規`tests/cloudflare-readback.test.mjs`でメタデータ投影、モード誤表示防止、不一致、認証エラー、GET限定、バージョンID固定・レスポンス漏洩防止の5件を追加。
+- 内容変更コミット`1ab7542e07b5f660a4eaf5e5ea7b2e42cfedc1d1`の[Callback relay CI](https://github.com/EliteMay/pc-agent/actions/runs/39274743664)は**55/55 PASS**・18モジュール構文/安全性チェック成功・Wrangler dry-runビルド成功。[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39274743694)も成功。ドキュメント更新コミット`16a03b425039f7ae6b7d3bfd60c494dcf2edd427`の[Relay CI](https://github.com/EliteMay/pc-agent/actions/runs/39275109140) / [Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39275109286)も成功。
+- `metadata_consistent`はCloudflare APIで取得できる一部の実効メタデータ整合だけを意味し、**稼働バージョンの実コードSHA-256同一性、プラットフォームログ非保持、Free課金、rollback実行、実OAuth許可を証明しない**。`deploy_authorized=false`と`live_oauth_allowed=false`は固定。
+- 本人報告の前回の一時Cloudflareトークンは無効化済み。新ツールによる実Cloudflareアクセスは今回未実行。Cloudflare側の稼働版・D1・Secrets・Sites・Windowsは変更なし。再発行は必要になった時のみ短期読み取り権限で行う。
+
