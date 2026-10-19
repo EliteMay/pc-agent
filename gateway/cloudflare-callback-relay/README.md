@@ -62,12 +62,13 @@ node tools/deploy-preflight.mjs <private-wrangler.json> <private-baseline.json>
 
 ## Cloudflare実効情報の読み取り専用検査（最新Versionを固定して照合）
 
-`tools/cloudflare-readback.mjs`は本人が管理するWorkerの以下の**4つの公式GET API**のみを利用します。コードや設定の更新はできず、デプロイコマンドも実装していません。
+`tools/cloudflare-readback.mjs`は本人が管理するWorkerの以下の**4種類の公式GET API（合計5回）**のみを利用します。コードや設定の更新はできず、デプロイコマンドも実装していません。
 
 1. `GET .../deployments`から現在100%配信のVersion IDを抽出。splitや欠落は停止。
-2. `GET .../versions/{version_id}`で**そのVersionに紐づく**メタデータを確認。対応Version ID、Runtime日時、fetch/scheduled handler、確認可能なBinding**名だけ**検証。
+2. `GET .../versions/{version_id}`で**そのVersionに紐づく**メタデータを確認。対応Version ID、Runtime日時（Cloudflareの日時付き形式も許容）、fetch/scheduled handler、確認可能なBinding**名だけ**検証。Bindingがオブジェクト形式と名前付き配列形式のどちらでも固定名だけ抽出し、未知形式は未確認扱い。
 3. `GET .../schedules`で実効Cronを確認。
 4. `GET .../script-settings`でLogs/Traces設定・Logpush・Tailを確認。
+5. `GET .../deployments`を再取得し、監査中に稼働Version IDとDeployment IDが切り替わっていないことを確認。途中変更は`unverified_deployment_changed`で停止。
 
 使用時だけ本人PCで一時的な`Workers Scripts Read`トークンを用意し、Nodeプロセスの環境変数`CLOUDFLARE_API_TOKEN`と`CLOUDFLARE_ACCOUNT_ID`から読み込みます。**トークンをコマンド引数、ChatGPT、GitHub、CI、ログ、ファイルに入れないこと。** 既に無効化した前回トークンは再利用できません。トークンは短い有効期限・単一アカウントに限定し、検査後すぐ無効化します。
 
