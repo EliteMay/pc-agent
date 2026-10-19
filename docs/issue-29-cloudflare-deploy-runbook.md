@@ -28,6 +28,19 @@
 
 Secretの値、API token、実際の`code/state`は記録しない。復旧用コードが存在しても古いDB schemaやBindingsと互換であるか別途確認する。
 
+### 読み取り専用API検査（追加）
+
+`gateway/cloudflare-callback-relay/tools/cloudflare-readback.mjs`で、Deploymentsの100%稼働Version IDを取得し、そのIDを指定してVersion情報を取得する。Cron/Script Settingsも公式GETで確認する。**GETのみ・API生レスポンスやSecret本文の出力禁止**。実行例はモジュール[README](../gateway/cloudflare-callback-relay/README.md#cloudflare実効情報の読み取り専用検査最新versionを固定して照合)を参照する。
+
+`metadata_consistent`は認証済みAPIが返したメタデータの形と一部の固定条件が一致しただけであり、以下を**証明しない**:
+
+- アップロード済みコードのバイト列がPR #42のソース/ビルド成果物と一致すること。
+- Cloudflare内部アクセスログ、Edge/CDN、SitesのHTTP body、D1 Time Travel等の非保持。
+- Freeプラン、残quota、ロールバック成功、実OAuthの安全性。
+- 自動デプロイ承認またはVersion切替承認。
+
+CloudflareのVersion detailの`resources.bindings`の形式が通常の配列でない場合は、Binding名確認が不明になり得る。値を表示して調べ直さず、公式UIの読み取りから別途照合する。既に前回の一時APIトークンは本人が無効化しているため、**再確認を実施する場合のみ新しい短期読み取り専用トークンが必要**。今は発行し直さない。
+
 ## 2. ローカル専用の候補設定
 
 本人管理のローカルPCに、リポジトリ管理外の**非公開**`private-wrangler.json`と`private-baseline.json`を用意する。既存公開`wrangler.json`は編集しない。
