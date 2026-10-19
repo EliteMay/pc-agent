@@ -60,6 +60,35 @@
 
 **追加修正（本PRのコードのみ）:** `scheduled()`がD1 cleanup失敗を捕捉して`{cleanup_completed:false}`を返し、Cloudflare実行履歴が成功し得る問題を修正。失敗時は生のDBエラーを含まない固定`relay_cleanup_failed`例外でCron invocationを失敗させ、成功時は正常終了する回帰テストを追加。**現行Cloudflare配置済みWorkerには未適用**で、旧履歴は遡及して確証にならない。CI結果は該当コミットのGitHub Actionsで別途検証する。
 
+## 2026-10-19 追補：再現可能なコード同一性検査の準備とOAuth残余リスク
+
+**実施した新規コード（Cloudflare実環境の更新ではない）**
+
+- `tools/artifact-identity.mjs`：Wranglerビルド済みJS partのSHA-256、ユーザーが認証取得した別ファイルとのローカルバイト比較。symlink、空/巨大ファイル、同一ファイル比較、無効な入力はfail closed。Cloudflare API接続、Token保存、コード本文出力はしない。
+- `tests/artifact-identity.test.mjs`：ハッシュ安定性、同一/不一致、入力拒否、複数JS part時の未確定表示を回帰テスト。
+- `callback-relay-ci.yml`：正式な`wrangler@4.128.0 deploy --dry-run --outdir .artifact`のみ実行して生成済みJSのSHA-256をCIログへ。CloudflareのAPI Secretを一切注入しない。**このWorkflowはデプロイしない**。
+- 実行結果: commit `c47d1f2db29b0ddfd36e330eb275e9087ca0e1af`の[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/39270733699)は46/46テスト成功、14 modulesの構文・設定チェック成功、Wrangler 4.128.0ビルド成功、生成JS partは1件。`single_part_sha256=8e12a5f90bd2856b038b54bd2e1325f2f658f08478c1cfbfd1dce35d1e71fd32`。[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39270733731)もsuccess。これは当該コミットでの**dry-run成果物**のdigestであり、稼働Cloudflareバイナリのdigestではない。
+- 該当コードのCLI詳細と禁止事項は[モジュールREADME](../gateway/cloudflare-callback-relay/README.md#配置コードの同一性検査デプロイしない)を参照。
+
+### 実OAuthに対するセキュリティ評価
+
+| リスク | 根拠・現状 | 残る境界と対応 |
+| --- | --- | --- |
+| Cloudflare内部・edgeアクセスログへ`code/state`が残る | 実callbackはquery経由。管理者可視Workers Logs/Tracesは無効、APIは`observability:null`。リアルタイムTailは保存型Logsとは別機構。 | 非公開プラットフォーム/CDN/ネットワーク層のURL保持は検証不能。保存ゼロとは言わず、OAuth開始前にユーザーが残余リスクを明示判断。 |
+| D1 Time Travelバックアップ | D1 FreeのTime Travelは有効で最大7日分遡って復元できる。active D1で`envelope=NULL`や行0を観測した。 | 過去の**暗号化**envelopeが復旧範囲内に残り得る。暗号鍵はWorker Secretへ限定、キー分離と300秒TTL/原子的claimを維持。全層即時削除とは表示しない。 |
+| SitesサーバーのPOST本文・response記録 | signed `/claim`はHTTPSでcode/stateをSitesサーバーに返す。保存版2のホスト層実効ログ範囲は未確認。 | ブラウザ/MCPへcodeを出さず、Server内部のみ使用。Sitesのrequest body/responseログが実際に無いかは未確認。 |
+| 実行コード相違・誤配布 | 旧Dashboard版`source=dash`、非Version固定の`content/v2`、GitHub3ソースと不一致。 | 新規CIでビルドSHAの正本候補を作成。ただしCloudflareの**稼働Version IDとそのコードを対応付ける証拠は引き続き未取得**。 |
+| 無断実行・追加料金 | 公開されたcallbackがFreeのリクエスト制限を消費可能、レート制限は固定窓境界で短期burstを許す。 | Freeの100k/day等はサービス側のquotaであり、DoS耐性や追加料金0円の完全保証ではない。アカウントのPlan/Quota継続監視が必要。 |
+
+**OAuth再開ゲート（未達）**：
+1. 実OAuth対応コードの別実装・セキュリティレビュー・Testsを通す（現行はdummy-only）。PKCE S256/issuer/state、元の4 Secrets、本人のみ、同意、Windowsローカル承認を維持。
+2. 許可した最終BuildのSHA-256と本番候補Deploy Version IDを紐づけ、既存Workerのrollback可能性、Cloudflareの実効ログ設定、Sites側の認証/本文経路を再確認する。
+3. ログ/Time Travelの残余リスクを本人が確認・許容し、Supabase redirect URI変更、Sites統合、本番デプロイ、OAuth同意についてそれぞれ必要な実行承認を得る。
+
+**運用上の重要な禁止事項：** 公開リポジトリの`wrangler.json`は`RELAY_ORIGIN=https://relay.example.invalid`とD1ゼロUUIDという**意図的なプレースホルダー**を使う。`--dry-run`を外して本番Workerを上書きしてはいけない。本人管理のDeployment設定を非公開で明示確認し、Secrets・Binding・Vars・Cron・Logs・Free費用・rollbackを個別にレビューした後でなければ実deploy禁止。
+
+参考: [Wrangler bundling](https://developers.cloudflare.com/workers/wrangler/bundling/), [Cloudflareリアルタイムログ](https://developers.cloudflare.com/workers/observability/logs/real-time-logs/), [D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/), [Script content API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/content/methods/get/)
+
 ## GitHub保存とCI
 
 - Draft [PR #42](https://github.com/EliteMay/pc-agent/pull/42)、branch `feat/issue-29-cloudflare-relay-dummy`。mainへのmergeなし。
