@@ -66,3 +66,4 @@
 - 実装commit `2f614cee900cdbad123ac26bdb8b0282ed28f15c`。追加19 filesのblobとbase既存108 filesをremote treeで照合し、一致/既存変更なし。
 - 実装commitの[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/38080984741) **success**、[既存Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/38080984742) **success**。
 - Agent/Manager全体のテストは今回のmodule変更の範囲外で、実行済みとはしない。Cloudflare runtimeやログ非保持の検証とは別。
+- 2026-10-19の修正後HEAD `5f6e38270e970323af0049256f511432f9a0953f`で、[Callback relay dummy CI](https://github.com/EliteMay/pc-agent/actions/runs/39268885022) は **42/42テスト成功**、12 modules構文・安全性チェック成功。Cron失敗例外テストの実行もジョブログで確認。既存[Gateway CI](https://github.com/EliteMay/pc-agent/actions/runs/39268884638)の型チェックも成功。すべてGitHub CIであり、Cloudflareへは未デプロイ。
