@@ -10,7 +10,7 @@ Issue #29の[正本設計](../../docs/issue-29-cloudflare-callback-relay.md)を�
 4. Sitesサーバーがローカルpendingを原子的に消費し、署名付き`POST /claim`のbodyでstate/bindingを指定します。Workerは一回だけ返し、同じD1トランザクション内で暗号文を消去します。
 5. サーバー内の`exchangeDummy`モックへ元のPKCE verifierとWorkerのredirect URIを渡します。ブラウザは有限の状態だけを受け取り、Gateway成功とは表示しません。
 
-HMAC-SHA256はorigin、POST、path、Unix時刻、nonce、body digestを署名します。時刻差30秒、永続nonce90秒、pending300秒です。署名されたprepareを固定10分窓で5回、active pendingを5件、claimを固定1分窓で20回に制限します。窓の境界では短時間にprepare10回/claim40回を許し得ます。rolling intervalの上限ではなく、live統合前に採用基準を確定する必要があります。D1 Cronで毎分失効行を削除し、Cron前でも期限切れを拒否します。
+HMAC-SHA256はorigin、POST、path、Unix時刻、nonce、body digestを署名します。時刻差30秒、永続nonce90秒、pending300秒です。署名されたprepareを固定10分窓で5回、active pendingを5件、claimを固定1分窓で20回に制限します。窓の境界では短時間にprepare10回/claim40回を許し得ます。rolling intervalの上限ではなく、live統合前に採用基準を確定する必要があります。D1 Cronで毎分失効行を削除し、Cron前でも期限切れを拒否します。**このブランチで修正後のCron**はD1削除失敗を握りつぶさず、固定文字列`relay_cleanup_failed`の例外で実行を失敗として報告します。元の配置済みWorkerには未反映のため、過去のCron履歴「成功」だけでは削除処理の成功を保証しません。
 
 `src/sites-client.mjs`はサーバー専用の接続インターフェースです。`authorize`は既存Sitesの信頼されたdispatch本人認証、`loadPending`は本人・HttpOnlyセッション照合、`consumePending`は条件付きDELETE等の原子的処理を必須とします。テストの`x-test-owner`を本番認証に流用しません。保存版2はstate digestのみなので、将来の正式統合時にraw stateを既存の暗号化pending envelope内へ追加する必要があります。raw stateをURLやブラウザから復元しません。
 
@@ -40,7 +40,7 @@ npm run check
 node tools/verify-log-settings.mjs < private-effective-settings.json
 ```
 
-`matched`は入力がWorker設定方針に一致した意味だけです。取得元の真正性、全Cloudflare層の非保持、SitesのPOST bodyログ、実OAuth許可は証明しません。省略値は安全と推定せず`unverified`、`live_oauth_allowed`は常にfalseです。通常の`npm run check`はplaceholderを含む未配置設定を検査するため、実アカウント用の変更は別の本人管理deploy設定へ分離します。
+**実環境の観測（2026-10-19、本人提供の実行出力）:** `script-settings`公式GETは成功し、`worker_settings=disabled_observed`、`logpush=false`相当を確認しました。`observability:null`の状態では個別のredaction/logs/tracesの実効値は取得できないため、`platform_log_scope`と実OAuth許可は引き続き未検証です。`content/v2`も読み取り成功しましたが、Cloudflareに配置された単一JS部分とGitHub上の3ソースの文字列は完全一致せず、Dashboardによるコード結合の可能性を排除できません。`ACTIVE_VERSION_BINARY_IDENTITY`は未証明であり、別の配置コードとの差異の可能性も残ります。本人は検証用APIトークンを無効化済みと報告しています。詳細は検証記録を参照してください。\n\n`matched`は入力がWorker設定方針に一致した意味だけです。取得元の真正性、全Cloudflare層の非保持、SitesのPOST bodyログ、実OAuth許可は証明しません。省略値は安全と推定せず`unverified`、`live_oauth_allowed`は常にfalseです。通常の`npm run check`はplaceholderを含む未配置設定を検査するため、実アカウント用の変更は別の本人管理deploy設定へ分離します。
 
 ## 本人の操作が必要になる次の段階
 
