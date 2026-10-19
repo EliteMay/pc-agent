@@ -33,7 +33,7 @@ export function inspectReadback({ deployments, version, schedules, scriptSetting
     : obj(bindings) ? Object.keys(bindings) : null;
   const date = versionResult?.resources?.script_runtime?.compatibility_date;
   const expectedDate = date === '2026-10-10' ||
-    /^2026-10-10T00:00:00(?:\\.0+)?Z$/.test(date ?? '');
+    /^2026-10-10T00:00:00(?:[.]0+)?Z$/.test(date ?? '');
   const checks = {
     active_single_version: single && uuid(activeId) && uuid(active?.id),
     version_detail_matches_active: uuid(activeId) && versionResult?.id === activeId,
