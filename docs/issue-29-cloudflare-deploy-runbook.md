@@ -30,7 +30,7 @@ Secretの値、API token、実際の`code/state`は記録しない。復旧用�
 
 ### 読み取り専用API検査（追加）
 
-`gateway/cloudflare-callback-relay/tools/cloudflare-readback.mjs`で、Deploymentsの100%稼働Version IDを取得し、そのIDを指定してVersion情報を取得する。Cron/Script Settingsも公式GETで確認する。**GETのみ・API生レスポンスやSecret本文の出力禁止**。実行例はモジュール[README](../gateway/cloudflare-callback-relay/README.md#cloudflare実効情報の読み取り専用検査最新versionを固定して照合)を参照する。
+`gateway/cloudflare-callback-relay/tools/cloudflare-readback.mjs`で、Deploymentsの100%稼働Version IDを取得し、そのIDを指定してVersion情報を取得する。Cron/Script Settingsも公式GETで確認する。**Deploymentsを最後に再取得するため、実際のHTTP GET回数は合計5回**。途中で稼働IDが変われば未確認として停止する。VersionのBinding表現は公式仕様に合わせてオブジェクト・名前付き配列両方を受け入れ、日時付のcompatibility dateも比較できる。**GETのみ・API生レスポンスやSecret本文の出力禁止**。実行例はモジュール[README](../gateway/cloudflare-callback-relay/README.md#cloudflare実効情報の読み取り専用検査最新versionを固定して照合)を参照する。
 
 `metadata_consistent`は認証済みAPIが返したメタデータの形と一部の固定条件が一致しただけであり、以下を**証明しない**:
 
