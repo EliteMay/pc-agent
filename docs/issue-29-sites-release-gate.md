@@ -300,3 +300,31 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 次はSites version7（owner-only、Relay/OAuth OFF）とPR #42のCloudflare dummy relay構成/既存Worker設定について、**read-only**のsource/artifact/current-hosting readbackを照合する。確認事項: Site側Relay adapterのHosted入口との配線、署名鍵の安全な同一値持込み方法、Worker active Versionとallowlisted origin、本人POST/CSRF、D1 bindingと既存データ非破壊、Cloudflare Free / Sites使用枠。Cloudflare Workerとのdummy実通信に必要な変更だけ最小化し、**実送信・Secret登録・Relay enable・Worker Deploy・課金・OAuth・家PC操作は別々の本人承認まで禁止**。
 
 実際の`gateway_probe`が正常な間は、理由のないSite再Deployやローカルテスト追加を止め、エンドツーエンド経路の阻害要因の特定へ進む。PR #42はDraft維持。
+
+## 2026-10-21 Claudeレビュー: 保存版8のGET/POST確認項目と、中継の必要性の検証（読み取りのみ・認証方式は未変更）
+
+**証拠の区別:** 保存版8 `307a341b…` のソースはGitHubに無く、Claudeは取得できていない。以下の「確認項目」はWorkで見る箇所の指定であり、保存版8の成否判定ではない。認証方式は変更していない。
+
+### A. `sites-client.mjs` のGET/POST不一致（確認済みの食い違い、影響は未確認）
+- GitHubの基準コード `gateway/cloudflare-callback-relay/src/sites-client.mjs` の `checkRoute` は、`complete` を **GET** `/connect/complete` として検証し、同じ呼び出し内で `consumePending` → 署名付き `/claim` を行う。つまり**状態変更GET**（本文書§1-7が指摘したCSRF懸念そのもの）。
+- Work報告（保存版4以降）は「GETは表示のみ、本人/Cookie/Origin/CSRF付きPOSTで消費・claim」。基準コードとSiteの実装が**食い違っている**。基準コードを保存版8がそのまま取り込んでいると、(1) POSTは `method_not_allowed` で拒否される、または (2) GETを許して状態変更GETが復活する、のどちらかになる。
+- **Workで見る箇所（保存版8）:** ①アダプターが `checkRoute` 相当を持つか／メソッド制約が `complete` でPOSTか。②GET `/connect/complete` ハンドラが `consumePending`・`/claim` を呼ばないこと（表示のみ）。③POSTが `x-oauth-csrf` を `pending.csrf` と比較していること（`prepare` は比較するが、基準コードの `complete` は比較しない）。④`Origin` が `SITE_ORIGIN` 固定であること（`null` は許さない）。⑤POST後の遷移がquery無しの303であること。⑥基準コードを直す場合は `tests/sites-client.test.mjs` の `complete` 系テストをPOST+CSRF前提に更新。
+- Claudeは、保存版8を確認できないため基準コードを書き換えていない（Site側と二重に食い違うのを避ける）。
+
+### B. Cloudflare中継は第1目標に本当に必要か
+**確認済みの事実**
+- 中継の動機は、Siteの `/oauth/callback?code=…&state=…` がSites管理のログに残る保証が無いこと（保存版2を停止した理由）。
+- Sitesの公式資料（learn.chatgpt.com/docs/sites）は、HTTP/HTTPS/WebSocketの**外向き通信を明記**している。Siteから `*.workers.dev` へのHTTPSは原理的に可能（実測は未了）。
+- Sitesの「アプリ/Pluginの接続」はプラットフォーム管理で、訪問者のChatGPT接続を使う機能。公式資料は**ワークスペース内のSiteであること、Plugin利用の有効化**を条件に挙げ、サーバー側から既存Gatewayを呼ぶ方法は記載していない。本Siteの `sites_list_plugin_eligibility` は提供されず**未判定**（`issue-29-chrome-plugin.md`）。個人アカウントで使えると仮定しない。
+- 既存の認証済みGateway（`oauth-pc-agent`）は `withSupabase({auth:"user"})` と許可ユーザー照合でSupabaseのユーザートークンを要求する。Siteがトークンを得る手段は現状OAuth（Site内実装）のみ。
+
+**仮説（未検証）**
+1. PKCE S256ではcode単体はトークンに交換できない（verifierはSite内のみ）。codeがSitesログに残るだけでは悪用しにくい可能性があり、中継の防御価値は想定より小さいかもしれない。ただしSupabase OAuthサーバーが当該クライアントでPKCEを必須にしているかは未確認。
+2. Siteから既存Gatewayへ到達する別経路（Site固有の署名付き要求など）は構造を大きく単純化し得るが、長期共有秘密という別のリスクを持ち、以前は不採用とされた。**検証前に変更しない。**
+
+**結論（現時点）:** 中継は「Sitesがログ保証なしのままSupabase OAuthのcodeを受ける」設計の前提では必要。ただし第1目標（PC側の画面取得・GUI操作）の達成には直接必要ではない。PC側は既存のデスクトップ限定Plugin経由でも独立に検証でき、Web経路（Sites）は伝送路の問題として分離して進められる。→ [PC側の完成度](issue-29-pc-side-readiness.md)（`feat/capture-click-geometry`）。
+
+### C. 次の最小検証（承認が必要な操作は含まない）
+1. Work: 上記A①〜⑥を保存版8のソースで読み取り、結果を記録。
+2. 本人: 新しい署名鍵はSites Hosted SecretsのUIとWorkerの両方へ本人が直接投入（チャットへ出さない）。実Worker送信は別承認。
+3. 外向き通信の実測は、署名なしの `/prepare` が `401 authentication_required` を返す（D1書込みなし）ことの確認が最小。署名鍵の登録より先にSiteの外向きHTTPSが通るかを切り分けられる。
