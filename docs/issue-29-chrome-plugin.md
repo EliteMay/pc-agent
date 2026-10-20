@@ -111,3 +111,17 @@ ChatGPT Workで検証し、[保存ログ](https://github.com/EliteMay/web-projec
 そのさらに後でのみ、OAuth Appのredirect URI（Site→Worker）とPKCE一致、ログの残存リスクと本人同意を審査する。元のIssue #29の4つの完成条件は未達のまま維持。
 
 **Workに渡す入口:** このセクションのURLと PR #42、Issue #29を参照し、作業範囲は「保存版2のSiteサーバー側dummy relay統合、mockのみ、未deploy」と指定する。
+
+## 2026-10-20：Sites未公開「保存版3」のモック統合（Workの本人提供結果）
+
+**証拠の境界:** 以下の保存・テスト実施結果はWork側の本人からこの会話に持ち込まれた報告。Sitesの保存版ソースやWork実行ログをこの通常チャットから直接読み直せていないため、`保存コミット bbb15b2`の完全性やテストログの内容を**独立再検証済みとは記述しない**。
+
+- Work報告: 既存の本人確認・Cookie・CSRF・暗号化pendingを再利用し、署名付き`prepare`/`claim`とpending原子消費を保存版2へ統合。保存版3として`bbb15b2`へ保存し、**公開はしていない**。
+- Work報告: 既存20件と新規12件で**32/32テスト成功**。型、lint、build成功。ブラウザ配布バンドルへの中継処理・秘密情報の混入は0件。
+- **この通常チャットで実測:** 既存のKaito PC Agent Web Bridge Plugin `gateway_probe({})`を再実行し、`mode=fixed-diagnostic`、`supabase_connected=false`、`pc_connected=false`、`approvals_bypassed=false`が返った。これは**現在の公開Pluginが固定診断のまま**という確認であり、保存版3の統合・Hosted D1・Cloudflare実通信の成功証明ではない。
+- Sites未公開保存版3へのアクセスはこの通常チャットで提供されないため、Sites内のソース監査/設定変更/プレビュー起動は未実施。実Worker通信、Hosted D1、実ブラウザ認証、実Cloudflareログの保持範囲、実OAuth、Supabase、家PCは未検証。
+- **次の実行前ゲート:** WorkのSite編集/プレビュー権限、保存版3の現行ソース・build・環境、プレビューがowner-onlyか、Site内の署名鍵の**存在と方式**、既存Workerの署名鍵に対応できるか、Rate limit/nonce/D1残存行の影響、origin/redirectの一致を読み取りだけで確認する。既存Sites Hosted Secrets4件は**OAuth用**であり、Relay用共有署名鍵があるという確認は未取得。Worker Secretは値を読み取れず、元の値を抽出・コピー・GitHubへ転記しない。
+- **まだ承認されていない操作:** 新しいSites Hosted Secret登録、既存Worker Secret上書き/ローテーション、Worker/D1設定変更、previewやproductionからの実Worker `prepare`/`claim`送信、Site公開、Supabase OAuth Redirect/本認証、PC操作。これらはこの報告だけを承認として扱わない。
+- **最小限の次実験:** 本人が対象操作を承認し、正式なSite previewのowner-only経路と署名鍵が整った場合だけ、**real OAuthでないダミー**の`prepare 201 → dummy callback 303（固定URL・queryなし）→ claim 200 → replay 409`、pending/nonce/TTL/暗号文NULL、ブラウザ表示にcode/state非露出を記録。既存公開Pluginは固定診断のまま維持し、実OAuthやPCコマンドを呼ばない。
+- Claude等の追加AIへ依頼するのは同じ障害が複数回再現し、原因を絞る追加レビューが必要な時のみ。Secret・未公開セッション・実OAuthデータを外部へ渡さない。
+
