@@ -150,3 +150,38 @@ Issue #29の4つのPC操作完成条件はすべて未検証・未達を維持�
 - **次の唯一の外部対応:** ユーザーが[OpenAI Support](https://help.openai.com/en/articles/6614161-how-can-i-contact-support)の右下チャットから非機密の仕様質問を送付（チャットからの自動送信は未実施）。回答を記録し、確証が得られなければ、実際に確認可能な小規模初回DB作成・リリースの残余リスク/止め方を明示して別判断にする。質問待ちの間、保存版6作成・Hosted DB作成・Deploy・Secret変更・実Worker通信・実OAuth・PC操作は行わない。
 - Issue #29の4完成条件は未達。現公開固定Plugin・Cloudflare Workerは変更なし。
 
+
+## 2026-10-20 Hosted migration内部仕様に依存しない最短検証ルート（Claude実装・ローカル検証のみ）
+
+**根拠の範囲:** この節は本リポジトリの実コードとローカルin-memory SQLite (`node:sqlite`) の結果だけに基づく。Sites Hosted D1の履歴・transaction・retry挙動は**依然として未確認**で、ここでも保証しない。
+
+### 方針: runnerの挙動を問わず安全なSQLだけを出荷する
+runnerが「各ファイルを1 transactionで実行」「文ごとにcommit」「途中失敗後に全体再実行」のどれでも、次を満たすSQLなら結果が同じになる。
+
+1. **追加のみ**: `CREATE TABLE` / `CREATE INDEX` 以外（DROP/DELETE/UPDATE/ALTER/INSERT等）を含まない。
+2. **文単位で冪等**: すべて `IF NOT EXISTS`。k文目まで適用後に全体再実行しても失敗せず、最終schemaが同一。
+3. **schema不一致はSQLで検出できない**: `IF NOT EXISTS` は同名・別構造の既存表を黙って許すため、アプリ側の起動時/`/health`相当で列・indexのfingerprint照合を行い、不一致なら**Relay機能のみ**fail-closed（`gateway_probe`は落とさない）。保存版5のSQLite復旧モジュールが既にこの役割を持つ想定（Work報告）。
+
+### 追加物
+- `gateway/cloudflare-callback-relay/tools/migration-safety.mjs`: SQL（Drizzle `--> statement-breakpoint`対応）を読み、(a)追加のみ判定、(b)全partial状態k=0..n後の全体再実行、(c)最終fingerprint一致、(d)無関係表データ保持、(e)同名別構造表の検出可否を出力。`--suggest`で`IF NOT EXISTS`化後の判定も出す。
+- `tests/migration-safety.test.mjs`: 7件。
+- 実行: `node tools/migration-safety.mjs --suggest <migration.sql>`（終了コード0=replay_safe）。
+
+### 実測結果（ローカル）
+- 既存 `migrations/0001_relay.sql` (5文): 追加のみ・データ保持OK、**再実行は途中適用k=1..5すべてで失敗** → `replay_unsafe`。`IF NOT EXISTS`化で`replay_safe`。※Cloudflare Worker側は適用済みなので変更しない（wrangler d1 migrationsの履歴が再実行を防ぐ前提。これは当方で未検証）。
+- Sites保存版5の4テーブルmigrationは**この通常チャットから取得できずツール未適用**。
+
+### Workが次にやる最小手順（読み取り＋ローカルのみ）
+1. 保存版5のbuild artifactの `dist/.openai/drizzle/**/*.sql` を `migration-safety.mjs --suggest` に通し、JSON結果を貼る（SQL本文は不要、verdictと配列のみで可）。
+2. `replay_unsafe` なら、保存版5のmigration SQLの `CREATE TABLE/INDEX` に `IF NOT EXISTS` を付けた**未公開の保存版6**を作る（`makeReplaySafe`の出力と同一差分）。既存テーブル破壊・データ移行は含めない。
+3. 起動時fingerprint照合（Relay機能のみfail-closed）がSite側に存在することをテストで確認。
+
+### 初回Deploy時のリスクと止め方（実行は別承認）
+| リスク | 緩和 | 止め方/復旧 |
+| --- | --- | --- |
+| migrationがdeploy前に適用され残る（公式Help明記） | 追加のみ・冪等SQL。失敗しても全体再実行で収束 | コードのみ旧版へ復元可。DBは巻き戻らない前提で、旧コードが新表を無視して動くことを事前テスト(E) |
+| partial適用後のretry失敗 | `replay_safe`判定済みSQLのみ使用 | 同じdeployを再実行。DROPは行わない |
+| 同名別構造表 | 起動時fingerprint | Relayのみ無効化、`gateway_probe`維持 |
+| 費用・枠 | 未取得のため承認前にUI確認 | 超過/不明なら中止 |
+
+**さらに低リスクな代替:** 初回deployは `.openai/hosting.json` から `d1` を外した**DB宣言なし**版で行えば、migrationもDB変更も発生せず固定診断のまま実接続コード(feature OFF)だけ載せられる。Relay有効化の段階で初めてD1を宣言する。このSites側差分はWork環境でのみ適用可能で、当方は未実施・未検証。
