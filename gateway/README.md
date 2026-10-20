@@ -145,3 +145,7 @@ Gateway v9 exposes two additional read-only Agent tools:
 Both tools are eligible for Task Observe and Verify phases because they grant no mutation capability. The Windows Agent remains authoritative for allowed-root enforcement, sensitive-path filtering, link avoidance, scan/result budgets, and file-size limits. `search_text` revalidates each file path immediately before opening it so a path changed during the scan cannot escape the configured roots.
 
 Common dependency/metadata directories such as `.git`, `node_modules`, `.next`, and `coverage` are not traversed. Full file contents are not returned; text search returns bounded matching line snippets only.
+
+## Capture geometry (2026-10-21)
+
+`capture_notepad` returns, when the Agent provides it, a `geometry` object (source-pixel `window_width/height` and the client-area rectangle `client_x/y/width/height`) and a `click_mapping` formula. `notepad_gui` `click` takes client-area pixels, so an image point maps as `x = round(px * window_width / width) - client_x`. Older Agents (0.11.4) send no geometry and the field is omitted; malformed geometry is dropped without failing the capture.
