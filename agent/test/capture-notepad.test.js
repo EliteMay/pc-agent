@@ -187,6 +187,18 @@ test("Windows capture fails closed without a usable absolute temporary directory
   );
 });
 
+test("a capture without geometry (older helper or unmeasurable client area) is still accepted, without a geometry field", () => {
+  const keys = ["window_width", "window_height", "client_x", "client_y", "client_width", "client_height"];
+  const bare = JSON.parse(reply());
+  for (const key of keys) delete bare[key];
+  const result = parseNotepadCapture(JSON.stringify(bare));
+  assert.equal(result.width, 640);
+  assert.equal(Object.hasOwn(result, "geometry"), false);
+  // null / partial sets are corrupt, not "absent"
+  assert.throws(() => parseNotepadCapture(JSON.stringify({ ...bare, window_width: 1000 })), (e) => e?.code === "INVALID_CAPTURE_RESULT");
+  assert.throws(() => parseNotepadCapture(JSON.stringify({ ...JSON.parse(reply()), client_x: null })), (e) => e?.code === "INVALID_CAPTURE_RESULT");
+});
+
 test("geometry lets a screenshot pixel be converted to the client coordinates notepad_gui click expects", () => {
   const { geometry, width, height } = parseNotepadCapture(reply({
     width: 500, height: 375, window_width: 1000, window_height: 750,

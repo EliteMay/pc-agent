@@ -1,6 +1,6 @@
 # Issue #29: PC側の完成度と実機E2E手順（2026-10-21、Claudeレビュー）
 
-**証拠の区別:** 「読んだ」はリポジトリのコード・テスト、この家PCの読み取り専用確認（バージョン、設定のキー名、ログの種別）。「未実施」は実機での画面取得・GUI操作・Gateway経由の通信。Sites・Cloudflare・Supabase・家PCのGUIには一切操作していない。
+**証拠の区別:** 「読んだ」はリポジトリのコード・テスト、PR本文、この家PCの読み取り専用確認（バージョン、設定のキー名、ログの種別）。実機の証拠は ①単体/CI、②家PCの開発用スモーク（PR本文の記録）、③本番E2E（未実施）に分けて扱う。Sites・Cloudflare・Supabase・家PCのGUIには今回一切操作していない。
 
 ## 1. 現在地
 
@@ -11,7 +11,7 @@
 | 0.11.4に含まれる機能 | 画面取得・GUI操作・ウィンドウ可視性修正（#31〜#34）を含む | `v0.11.4` = `31a4c1b` |
 | 0.11.5との差 | 「期限切れのローカル承認を拒否」する安全修正（#35）のみ。**GitHub Releaseは v0.11.4 が最新で、v0.11.5は未公開** | `git diff v0.11.4 main`、Release API |
 | Gateway（`gateway/oauth-pc-agent`）のコード | 上記ツールを公開済み（VERSION "9"）。**本番にデプロイ済みの版は未確認**（Supabase認証が必要で当方は未接続） | 読んだ |
-| 実機での画面取得・GUI操作 | **未実施**。`PrintWindow`のNotepad（Win11 XAML）での描画、フォーカス移動、`SendInput`到達は実測なし | Issue #29コメント、docs |
+| 実機での画面取得・GUI操作 | **3段階で区別する。** ①単体テスト／CI: 通過。②家PCでの**開発用スモーク**（開発worktreeのAgentツールを直接実行、承認キュー・Gatewayなし）: 記録あり — v0.11.1導入後に`capture_notepad`が`CAPTURE_FAILED`（TMP未設定でAdd-Type失敗）を実測し0.11.2で修正（PR #32）、GUI入力は無害なNotepadへの`click`と`scroll`が`dispatched:true`・ウィンドウ可視維持を確認、`open`も成功、可視性喪失の原因（初回ShowWindow）を再現して0.11.4で修正（PR #33/#34）。③**本番E2E**（ChatGPT→Plugin→Gateway→Manager承認→Agent→画像表示）: **未実施**。②の記録は各PR本文によるもので、今回の再実行はしていない。`type`/`save`の開発用スモーク記録は確認できていない |
 | ChatGPT→Gateway→Agentの通信 | 通常ChatGPTのPlugin経路は未接続（Siteは固定診断のみ） | Issue #29 |
 | Desktop Commander連携 | `manage_desktop_commander_remote=true`。起動時にDesktop Commander Remoteを**Managerが起動**する（Game Safety用の任意機能） | `manager.json`のキー名、`manager.log` |
 
@@ -36,7 +36,7 @@
 
 ## 4. 残る障害
 
-- 実機でのキャプチャ・入力は未実測（Win11 Notepadでの`PrintWindow`、フォーカス、`SendInput`）。
+- ③本番E2E（承認キュー経由の画面取得・入力、画像のChatGPT表示）は未実施。②の開発用スモークでは`type`/`save`の記録を確認できておらず、承認キュー経由の実測も無い。Win11 Notepadでの`PrintWindow`出力品質、フォーカス競合は②③で継続確認が必要。
 - v0.11.5未公開（Release作成は別承認）。
 - 本番Gatewayのデプロイ版が未確認。
 - Webの通常ChatGPTからGatewayへ至る経路（Sites）が未完成。

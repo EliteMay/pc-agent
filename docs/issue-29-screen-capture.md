@@ -42,6 +42,8 @@
 
 **Change:** the capture helper additionally reports the source window size and the client-area rectangle relative to the captured window (`window_width/height`, `client_x/y`, `client_width/height`, source pixels). The Agent validates them (all required, bounded, client area inside the window) and returns them as `geometry`. The OAuth gateway forwards `geometry` plus a one-line `click_mapping` formula when present and drops it silently from older Agents. `click` semantics are unchanged.
 
+**Compatibility:** geometry is advisory. If the helper cannot measure a sane client rectangle it omits the fields and the screenshot is still returned; a partial or out-of-range set is rejected as corrupt. Older Agents (0.11.4) send none and the gateway omits `geometry`.
+
 **Mapping:** for an image point (px, py): `x = round(px * window_width / width) - client_x`, `y = round(py * window_height / height) - client_y`.
 
-**Verification status:** Agent unit tests, PowerShell parse and C# compile are local evidence only. The helper has **not** been run against a real Notepad window, DPI scaling other than 100% is untested, and the gateway change is verified by CI `deno check` only. Needs the install and the physical run in the Issue #29 gate list.
+**Verification status:** Agent unit tests, PowerShell parse and C# compile are local evidence only. The geometry addition itself has **not** been run against a real Notepad window (earlier development smoke tests of capture/click/scroll on the home PC are recorded in PRs #32-#34, but predate this change), DPI scaling other than 100% is untested, and the gateway change is verified by CI `deno check` only. Needs the install and the physical run in the Issue #29 gate list.
