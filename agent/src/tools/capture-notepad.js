@@ -33,6 +33,19 @@ export function parseNotepadCapture(stdout) {
     throw new ReadOnlyToolError("Invalid Notepad capture metadata.", "INVALID_CAPTURE_RESULT");
   }
 
+  // Geometry (source pixels) is what lets a coordinate read off the downscaled image
+  // be converted to the client-area coordinates that notepad_gui click expects.
+  const isInt = (v, min, max) => Number.isSafeInteger(v) && v >= min && v <= max;
+  if (
+    !isInt(result.window_width, 64, 3840) || !isInt(result.window_height, 64, 2160)
+    || !isInt(result.client_x, 0, result.window_width - 1)
+    || !isInt(result.client_y, 0, result.window_height - 1)
+    || !isInt(result.client_width, 1, result.window_width - result.client_x)
+    || !isInt(result.client_height, 1, result.window_height - result.client_y)
+  ) {
+    throw new ReadOnlyToolError("Invalid Notepad capture geometry.", "INVALID_CAPTURE_RESULT");
+  }
+
   const image = Buffer.from(result.image_base64, "base64");
   if (
     image.length < 4 || image.length > MAX_IMAGE_BYTES
@@ -48,7 +61,15 @@ export function parseNotepadCapture(stdout) {
     mime_type: "image/jpeg",
     image_base64: result.image_base64,
     width: result.width,
-    height: result.height
+    height: result.height,
+    geometry: Object.freeze({
+      window_width: result.window_width,
+      window_height: result.window_height,
+      client_x: result.client_x,
+      client_y: result.client_y,
+      client_width: result.client_width,
+      client_height: result.client_height
+    })
   });
 }
 

@@ -132,7 +132,13 @@ test("queued screenshot passes only with consent and stores a result hash, not i
           mime_type: "image/jpeg",
           image_base64: jpeg,
           width: 1,
-          height: 1
+          height: 1,
+          window_width: 100,
+          window_height: 100,
+          client_x: 0,
+          client_y: 30,
+          client_width: 100,
+          client_height: 70
         }), stderr: ""
       };
     }

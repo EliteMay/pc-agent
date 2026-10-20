@@ -6,6 +6,10 @@ using System.Runtime.InteropServices;
 public static class PcAgentWindowCapture {
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref POINT point);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
@@ -45,6 +49,21 @@ $height = $rect.Bottom - $rect.Top
 if ($width -lt 64 -or $height -lt 64 -or $width -gt 3840 -or $height -gt 2160) {
     throw 'Notepad dimensions are outside capture limits.'
 }
+# Same client-area definition notepad_gui click uses, expressed relative to the captured window image.
+$client = [PcAgentWindowCapture+RECT]::new()
+$origin = [PcAgentWindowCapture+POINT]::new()
+if (-not [PcAgentWindowCapture]::GetClientRect($hwnd, [ref]$client) -or
+    -not [PcAgentWindowCapture]::ClientToScreen($hwnd, [ref]$origin)) {
+    throw 'Cannot read Notepad client area.'
+}
+$clientX = $origin.X - $rect.Left
+$clientY = $origin.Y - $rect.Top
+$clientWidth = $client.Right - $client.Left
+$clientHeight = $client.Bottom - $client.Top
+if ($clientX -lt 0 -or $clientY -lt 0 -or $clientWidth -lt 1 -or $clientHeight -lt 1 -or
+    $clientX + $clientWidth -gt $width -or $clientY + $clientHeight -gt $height) {
+    throw 'Notepad client area is outside the window bounds.'
+}
 $source = [System.Drawing.Bitmap]::new($width, $height)
 try {
     $graphics = [System.Drawing.Graphics]::FromImage($source)
@@ -83,6 +102,12 @@ try {
                     image_base64 = [Convert]::ToBase64String($stream.ToArray())
                     width = $outWidth
                     height = $outHeight
+                    window_width = $width
+                    window_height = $height
+                    client_x = $clientX
+                    client_y = $clientY
+                    client_width = $clientWidth
+                    client_height = $clientHeight
                     target = 'notepad'
                 }
                 [Console]::Out.WriteLine(($payload | ConvertTo-Json -Compress))

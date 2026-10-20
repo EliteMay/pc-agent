@@ -150,7 +150,7 @@ const TOOLS = [
   {
     name: "notepad_gui",
     title: "Click, type, scroll, or save in Notepad with local approval",
-    description: "Open one allowed .txt file or perform one strictly bounded action in the sole visible Notepad window. Requires physical PC Manager approval every time. Use capture_notepad afterward to verify the visible result.",
+    description: "Open one allowed .txt file or perform one strictly bounded action in the sole visible Notepad window. Requires physical PC Manager approval every time. Click x/y are client-area pixels of that window (see geometry in the capture_notepad result for converting image coordinates). Use capture_notepad afterward to verify the visible result.",
     inputSchema: {
       type: "object",
       properties: {
@@ -340,8 +340,33 @@ function mcpResult(id: unknown, payload: unknown, isError = false) {
   });
 }
 
+// Source-pixel geometry from the Agent. Advisory only: an older Agent has none, and
+// anything malformed is dropped rather than failing an otherwise valid capture.
+function captureGeometry(value: any) {
+  const isInt = (v: unknown, min: number, max: number) =>
+    typeof v === "number" && Number.isSafeInteger(v) && v >= min && v <= max;
+  if (
+    !value || typeof value !== "object"
+    || !isInt(value.window_width, 64, 3840) || !isInt(value.window_height, 64, 2160)
+    || !isInt(value.client_x, 0, value.window_width - 1)
+    || !isInt(value.client_y, 0, value.window_height - 1)
+    || !isInt(value.client_width, 1, value.window_width - value.client_x)
+    || !isInt(value.client_height, 1, value.window_height - value.client_y)
+  ) return undefined;
+  return {
+    window_width: value.window_width,
+    window_height: value.window_height,
+    client_x: value.client_x,
+    client_y: value.client_y,
+    client_width: value.client_width,
+    client_height: value.client_height,
+    click_mapping: "For a point (px,py) in the returned image: x = round(px * window_width / width) - client_x; y = round(py * window_height / height) - client_y. notepad_gui click takes client-area coordinates.",
+  };
+}
+
 function mcpCaptureResult(id: unknown, payload: any) {
   const image = payload?.result;
+  const geometry = captureGeometry(image?.geometry);
   const metadata = {
     success: true,
     command_id: payload.commandId,
@@ -349,6 +374,7 @@ function mcpCaptureResult(id: unknown, payload: any) {
     mime_type: "image/jpeg",
     width: image?.width,
     height: image?.height,
+    ...(geometry ? { geometry } : {}),
     cloud_result_redacted: true,
   };
   if (
