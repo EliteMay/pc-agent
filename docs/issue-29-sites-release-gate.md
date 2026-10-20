@@ -81,3 +81,23 @@ WorkがSites nativeから次を実際に読み取り、表に埋めるまで外�
 **Stop condition:** 本番の固定Plugin維持とmigration失敗時の回復方法が独立して確認できないなら、Sites初回Deployを実施しない。技術的に停止中でも正常な判断である。
 
 参考: [Cloudflare Relay Runbook](issue-29-cloudflare-deploy-runbook.md)、[Sites handoff](issue-29-chrome-plugin.md)、[Guide Security](https://github.com/EliteMay/web-project-guide/blob/main/docs/06-security.md)、[Guide Testing](https://github.com/EliteMay/web-project-guide/blob/main/docs/07-testing-quality.md)、[Guide Data](https://github.com/EliteMay/web-project-guide/blob/main/docs/03-data-storage.md)、[Guide Maintenance](https://github.com/EliteMay/web-project-guide/blob/main/docs/09-maintenance.md)。
+
+## 2026-10-20 保存版4の実装結果と「migrationを再実行しない」決定ゲート
+
+**Workからの本人提供結果（この通常チャットでSiteコード/実行ログを独立取得していない）**
+
+- Sites未公開の保存版4 commit: `7b773ddbaf36d5ef1248a980b7ca4dd37c67a521`。公開中の既存固定診断Pluginは変更なし。
+- `gateway_probe`既存Contract維持。D1/Secret/schema未設定時もfixed probeはmock検証で正常。Relayと実OAuthは初期OFF、単なるenv-var入力では有効にならない構成。
+- `GET /connect/complete`は状態変更しない。本人/HttpOnly Cookie/Origin/CSRFを満たすPOSTのみpending consume/claimを行う。Workの報告では37/37テスト、型、lint、build成功、client artifactの指定Secret marker 0。
+- **重要:** 4個の新規テーブルだけをCREATEする現行migrationはローカルSQLiteで旧版互換・既存データ維持を確認したが、**同じSQLの再適用や途中適用後の単純再実行では失敗**。Hosted migration履歴、partial applyの挙動、rollback後のschema互換はまだ未検証。Hosted D1 Binding 0、table 0（Workからの過去読み取り）。
+- Workの報告は**安全な初回Hosted migration成功**を証明しない。未公開保存だけなので本番データを変更していない。
+
+**本番前の次の1課題: Sites native migration runnerの厳密な実装確認**
+1. Sites Workで、現在の保存版4 `7b773ddb…`、公開中Version ID、migration SQL全文、schema/catalog宣言、正式デプロイ操作のmigration実行順序、migration履歴テーブルとTransaction境界を**実際に読み取る**。どのチェックポイントから自動再試行するのか、途中で4テーブル中1〜3テーブルだけ存在するとどうなるかを明確にする。推測しない。
+2. 一度だけmigrationが実行されることを履歴で保証する設計でも、**デプロイ途中失敗時のSQL再実行**と差分整合の検証が必要。空のローカルDBだけでなく、A.未適用、B.全部適用済み、C.1〜3テーブル適用済み、D.同名テーブルが異なるschema、E.旧code+new schema、F.新code+schema未適用をテストする。
+3. **部分適用後の反復実行に失敗するなら**、既存テーブル破壊を伴わない最小限のmigration/runner修正案をWorkで準備し、検証後も未公開保存にとどめる。`CREATE TABLE IF NOT EXISTS`は**不一致schemaを無視する**危険があるため、安易に付けるだけでは合格としない。正しいschema fingerprint/列・index検証、明示的migration version/history、既存データ非破壊とTransaction境界に合わせる。
+4. 公式Sites操作でmigrationの独立Dry-runが利用できない場合はその制約を記録し、初回Deploy前に旧固定Pluginの復旧手順（source/deploy ID、DB残存確認、environment/Secret変更影響）を実観測できる状態にする。**実Deploy/新D1/Hosted migrationの実行は別途本人承認**。
+
+**追加の現在仕様:** [OpenAI公式Sites Help](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)は「publishing can change the Site's database before the new version goes live」「restoring earlier version restores code, not DB/files」「regional hosting siteのSecret値更新は再公開なしでもliveに影響し得る」と明記。Sites利用料は[同ヘルプ](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)で「building/editing counts toward Codex usage、run/hostingは別枠」と説明されるため、**Cloudflare Workers FreeだけでSitesの追加費用0円を保証しない**。現在の本人環境で課金/QuotaのUIを確認するまで本番Deployを承認しない。
+
+**次実装の優先順位:** migrationの再試行/部分適用を調査→必要なら未公開修正→Hostの正規Deployと課金・復旧ゲート確立→必要最小限のサーバー限定通信adapterと本人POST UI→署名鍵の安全なSecret登録案→本人承認後にdummy実通信。未実施のOAuthや家PC E2Eを成功扱いしない。
