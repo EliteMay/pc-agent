@@ -138,3 +138,15 @@ WorkがSites nativeから次を実際に読み取り、表に埋めるまで外�
 | Supabase OAuth認可、PC Agentの本番GUI操作 | 前段dummy実通信の確認のさらに後、本人OAuth/PCローカル承認を別ゲートで実行 |
 
 Issue #29の4つのPC操作完成条件はすべて未検証・未達を維持する。
+
+## 2026-10-20 保存版5 Hosted migrationネイティブ調査の結論（Work本人報告）
+
+- WorkはSites保存版5 `4478d3490506340634a58a5b1403c02c97e5a41b`を変更せず、Siteネイティブ管理仕様・公開資料・保存されたPR #42 HEAD `edd66367`を調査したと報告。
+- build artifactにSQLと**Drizzle journal**の存在を確認したが、これらは**Hostedに適用済みという証拠ではない**。Hosting migration履歴/チェックサム、同時実行・重複実行防止、transaction粒度、SQL途中失敗後のcommit状態、部分適用後のretry/repairは調べられる公式機能と文書から不明。
+- OpenAI公式[Creating and using ChatGPT Sites](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)でDB変更がアプリ公開より先行して残り得ること、復元でコードしか戻らないことは明記される。詳細な内部migration保証は明記されず、**運用上の契約として確認できていない**。
+- Work readbackでは現公開環境のD1 Binding 0、tables 0。旧保存版1のsource・archive・成功deploymentが存在し、正式な再デプロイ操作も提示されるが**実復元は未実行**。旧公開時のEnvironment revision `0`に対し現在の保存設定はrevision `5`。旧版の再デプロイを旧環境・Secrets・DBまで含む完全復元として扱わない。
+- Work報告でPlus/Pro Sites hostingはプラン込み、SiteごとのDB上限10GB。**ユーザー固有の使用量・共有枠残量は未取得**で、他リソース・利用制限まで「無料・無制限」と認定しない。
+- Work作成のOpenAI Support非機密問い合わせ案は**未送信**。質問事項：migration識別子/適用履歴参照、SQL/ファイルtransaction、SQL+履歴更新の原子性、4テーブル部分適用時の復旧とretry、同時deploy・重複防止、writeしないdry-run、コード復元後のDBとEnvironment取り扱い、Plus共有枠の表示/超過挙動。
+- **次の唯一の外部対応:** ユーザーが[OpenAI Support](https://help.openai.com/en/articles/6614161-how-can-i-contact-support)の右下チャットから非機密の仕様質問を送付（チャットからの自動送信は未実施）。回答を記録し、確証が得られなければ、実際に確認可能な小規模初回DB作成・リリースの残余リスク/止め方を明示して別判断にする。質問待ちの間、保存版6作成・Hosted DB作成・Deploy・Secret変更・実Worker通信・実OAuth・PC操作は行わない。
+- Issue #29の4完成条件は未達。現公開固定Plugin・Cloudflare Workerは変更なし。
+
