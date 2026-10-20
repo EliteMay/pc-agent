@@ -270,3 +270,15 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 4. 診断が壊れたままの利用影響を確認し、復元を推奨する場合はversion1のcode-only復元と環境revision5/DB残存の差異を明確にして承認を取る。自動復元はしない。
 
 **更新による上書きに注意:** 直前のGo/No-Go節の「初回Deploy未実施」は**当時のスナップショット**。現在は**Deploy成功・post-deploy固定診断失敗**が最新。
+
+## 2026-10-20 Sites保存版7: MCP tools/call _meta互換修正（未公開）
+
+**Work本人提供の検証報告:** 前段の初回Deployは保存版6 `970c7ea993943a6a77cb2eda85112a230fa10fa9`、Deployment `appgdep_6ad775854dd0819189060d485e6b8572` がsucceededだが、公開後 `gateway_probe({})` は `-32602` / `Only named diagnostics with empty arguments are allowed` で失敗しており、修正前の本番稼働は不完全。
+
+- **新たな未公開保存版7:** `1d10fc907c0330245d9efa0fd531d9bb8de8b8a6`。**本番再Deployしていない**。
+- **根拠のある互換性不具合:** 保存版6の `lib/mcp.mjs` が `tools/call`の `params.name` と `arguments` 以外のプロパティを拒否し、標準の `params._meta` もエラーにしていた。MCP [2025-11-25公式schema.json](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.json) の `CallToolRequestParams` には `_meta`（object、optional）・`name`（必須）・`arguments`（object、optional）がある。**通常チャット側から公式スキーマを独立取得して確認済み**。
+- **Workのローカル比較:** 旧版1・保存版6・未公開版7の空引数 `gateway_probe` は成功。空引数+`_meta` は旧版1成功/保存版6 `-32602`/保存版7成功。非空引数、不明toolは引き続き拒否。修正は`_meta`をobjectとして受理し、認証・引数・通信先には使用しない最小差分との報告。
+- **Work報告のテスト:** 56/56 PASS、typecheck/lint/build PASS、外部実通信禁止テストPASS。実Worker、実OAuth、PC操作なし。D1の4表/migration、Secretsを変更せず、Relay・実OAuth OFF、owner-onlyを維持。
+- **因果関係は未確定:** 現実の失敗したJSON-RPCリクエスト本文は取得できず、`_meta`が付いていたこと自体は仮説。キャッシュや別のパラメータ不一致は排除していない。従って**本番 `gateway_probe` が復旧したとは言わない**。
+- **次の判断:** ユーザーから改めて明示承認を得た場合のみ、既存owner-only Siteに**保存版7だけを正式な `deploy_private_site_version` で1回再Deploy**する。既存D1 Binding/4表、環境revision、共有範囲、schema/SQL適用影響がないことをreadbackし、Deploy statusと接続済み通常ChatGPT `gateway_probe({})` の結果を計測。Probe正常応答にならない/SQL migrate再実行・quota/費用・予期しない設定変更があれば連続再DeployせずSTOP。Secret登録、Relay有効化、Worker live送信、OAuth、PC操作は別承認。
+- **事実/未確認:** GitHubのPR #42は別の管理系。Site保存版7のソース・ログをこの通常チャットから独立取得していない。Hosted runnerの履歴・atomicity・再試行は引き続き保証外。Issue #29の4完成条件は未達。
