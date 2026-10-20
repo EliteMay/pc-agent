@@ -101,3 +101,40 @@ WorkがSites nativeから次を実際に読み取り、表に埋めるまで外�
 **追加の現在仕様:** [OpenAI公式Sites Help](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)は「publishing can change the Site's database before the new version goes live」「restoring earlier version restores code, not DB/files」「regional hosting siteのSecret値更新は再公開なしでもliveに影響し得る」と明記。Sites利用料は[同ヘルプ](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)で「building/editing counts toward Codex usage、run/hostingは別枠」と説明されるため、**Cloudflare Workers FreeだけでSitesの追加費用0円を保証しない**。現在の本人環境で課金/QuotaのUIを確認するまで本番Deployを承認しない。
 
 **次実装の優先順位:** migrationの再試行/部分適用を調査→必要なら未公開修正→Hostの正規Deployと課金・復旧ゲート確立→必要最小限のサーバー限定通信adapterと本人POST UI→署名鍵の安全なSecret登録案→本人承認後にdummy実通信。未実施のOAuthや家PC E2Eを成功扱いしない。
+
+## 2026-10-20 保存版5とSites正式migration仕様の確認ゲート
+
+### Workが報告した未公開成果（正常性はWork報告、通常チャットからSites内部コードは未取得）
+
+- Sites保存コミット: `4478d3490506340634a58a5b1403c02c97e5a41b`、未公開。固定診断`gateway_probe`の後方互換を維持し、Relay/実OAuthは初期状態で禁止。
+- SQLite専用の非破壊リカバリとschema不一致検出を追加。新規4テーブルが存在/欠落する全16状態、SQL再実行、旧データ維持、失敗時ロールバックを**ローカルメモリ内SQLite**で検証。
+- 固定Worker Originしか使わないserver-onlyの実通信adapterと、本人/Cookie/Origin/CSRFを維持するPOST操作UIを実装。ただし**実Workerは呼び出していない**。
+- Work報告では**46/46 tests PASS、型検査・lint・build PASS、実通信禁止テスト成功**。Hosted D1でこれらを実行したわけではない。
+- **残る唯一のリリース前主要ゲート:** Sites Hosted D1の「migration履歴管理・Transaction境界・partial failure後のretry/resume」を現在の本人Siteのnative hosting toolingで検証できていない。ローカル復旧モジュールをHostedの自動Migration保証と解釈しない。
+
+### 2026-10-20 OpenAI公式資料で新たに確認したこと
+
+1. [Creating and using ChatGPT Sites](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites) は、**デプロイ中にlive切替より前のDB変更が残り得る**こと、バージョン復元ではコードだけ戻りDB/ファイルは戻らないことを明記している。Sitesの正式migration runnerが全SQLを単一Transactionにすることや、自動retryが何を基準にするかは同ページから確認できない。
+2. 同ヘルプの現行FAQは、**Plus/ProのSites hostingは現在利用プランに含まれる**と明記。Siteの作成・編集はCodex使用量を消費し、Sitesのrun/storageには共有限度がある。料金0円の目標に対し、**別サービスへの支出は不要と見込めるが、限度超過や製品の料金変更を勝手に許可しない**。Cloudflare Freeとは別のquota。旧文書にある「Plus/Pro Hostingが必ず別料金」という趣旨の解釈は採用しない。
+3. [Sites developer guide](https://learn.chatgpt.com/docs/sites) と [Publish and share](https://learn.chatgpt.com/docs/sites/publishing-and-sharing) では、version saveとproduction deployが別ステップ、`.openai/hosting.json`内の`d1: "DB"`、artifact内のmigrationのReviewが必要なことを確認。公開資料の対象箇所から、**本人のSites backendでのmigration atomicity/idempotency/履歴表の仕様までは確定できなかった**。一般的なCloudflare D1/Drizzle動作からSites内部を類推しない。
+
+### 次の1タスク（新しい保存版を作る前に、Sitesネイティブ読取と仕様照会に集中）
+
+**対象:** 現在公開中の固定診断Siteと保存版5 `4478d349…`。他Site/Cloudflare Workerには変更しない。
+
+1. Workで**現在のSites実装・専用skill/referenceの現物**を読み、利用可能なmigration/D1/hosting nativeコマンドの仕様、正式migrationパッケージ `dist/.openai/drizzle/**`、適用済みmigrationの履歴/チェックサム、Transaction境界、並行deploy/途中失敗時の規則を確認。API・tool説明とSource/Host観測を証拠として区別。専用機能が存在しなければ「未提供」と記録する。
+2. ソース側の4テーブルmigrationについて、未適用/全部適用/部分適用の各状態を既存の**ローカル**検証結果と照合し、「Sites hosting runnerが自動で再実行しないことをどう保証するか」「1〜3テーブル適用後のcheckpointがどこか」を具体的に回答する。**正式Toolが答えられない場合、推測でYesにしない。**
+3. Hosting nativeのread-only操作がある場合だけ、**現published deploy IDと共有範囲、既存DB Binding・tables/migration historyの有無**を再観測する。Viewerの変更/DB provision/URL作成/Secret登録/Worker接続・deployはまだ禁止。
+4. MigrationのTransaction/復旧仕様が不明なら、OpenAI公式Supportへ問い合わせるための**非機密質問文**を準備する。Secret、Site owner email、private source/SQL本文、認証データをサポートへの初回依頼に記載しない。規約やhelpで保証されない処理を自作修正だけで解決済みにしない。
+5. 質問へ回答が来るまでは、**Site公開・D1構築・migration適用を止める**。新しい保存版6や追加のローカルテストは、実際の失敗原因が判明してから必要な最小修正に限定する。無関係のCloudflare auditやプレビューの試行を繰り返さない。
+
+### 公開許可ゲート（すべて未承認）
+
+| 関連操作 | 条件 |
+| --- | --- |
+| Sites保存版5をproduction deploy（D1 migrationを伴う可能性） | 正式なmigration/復旧条件の把握、旧公開Site固定診断の復元経路、owner限定共有、課金/usage限度、対応バージョンを本人がレビューし**明示承認** |
+| Sites Relay Secretの登録 | 既存Worker署名鍵の安全な同一値持込み方法が明確か、別承認の鍵ローテーション計画。値はGitHub/会話に出さない |
+| Relay adapterを有効化して実Workerへdummy送信 | Sites/Workerの両端key/Origin/Bindingsに加え本番ログ/アクセス権の確認と**別承認** |
+| Supabase OAuth認可、PC Agentの本番GUI操作 | 前段dummy実通信の確認のさらに後、本人OAuth/PCローカル承認を別ゲートで実行 |
+
+Issue #29の4つのPC操作完成条件はすべて未検証・未達を維持する。
