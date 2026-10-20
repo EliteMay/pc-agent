@@ -124,3 +124,26 @@ test('hard-to-lex SQL is refused, never guessed', () => {
   }
   assert.equal(analyze('CREATE TABLE t(a TEXT REFERENCES missing(id)); CREATE INDEX i ON nope(a);').verdict, 'unsupported_sql');
 });
+
+test('regression: a migration with zero statements is refused, not judged safe', () => {
+  for (const sql of ['', '   \n', '-- only a comment', '/* c */;', ';;']) {
+    const r = analyze(sql);
+    assert.equal(r.verdict, 'unsupported_sql', JSON.stringify(sql));
+    assert.equal(r.reason, 'no statements');
+  }
+});
+
+test('regression: fingerprint keeps string literal contents (whitespace, case, "if not exists")', () => {
+  const view = lit => shape(`CREATE TABLE t(id TEXT);CREATE VIEW v AS SELECT ${lit} FROM t;`);
+  assert.notEqual(view("'A B'"), view("'A  B'"), 'internal whitespace');
+  assert.notEqual(view("'A B'"), view("'A\tB'"), 'tab vs space');
+  assert.notEqual(view("'before if not exists after'"), view("'before after'"), 'if not exists inside a string');
+  assert.notEqual(view("'X'"), view("'x'"), 'case');
+  assert.notEqual(view("'a(b)'"), view("'a( b )'"), 'spaces next to parens inside a string');
+  assert.equal(view("'A B'"), view("'A B'"));
+  // layout outside strings and the leading IF NOT EXISTS are still ignored
+  assert.equal(shape("CREATE TABLE t(v TEXT DEFAULT 'A B');"), shape("CREATE TABLE IF NOT EXISTS `t` (\n  v TEXT   DEFAULT 'A B'\n);"));
+  assert.equal(shape('CREATE TABLE t(id TEXT);CREATE INDEX i ON t(id);'), shape('CREATE TABLE t(id TEXT);CREATE INDEX IF NOT EXISTS i ON t(id);'));
+  // quoted identifier with a space stays verbatim (not collapsed)
+  assert.notEqual(shape('CREATE TABLE t("a b" TEXT);'), shape('CREATE TABLE t("a  b" TEXT);'));
+});

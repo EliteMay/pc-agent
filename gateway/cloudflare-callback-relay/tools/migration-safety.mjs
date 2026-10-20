@@ -22,7 +22,7 @@ const INDEX = new RegExp(`^CREATE\\s+(UNIQUE\\s+)?INDEX\\s+(IF\\s+NOT\\s+EXISTS\
 // they are never edited or mistaken for syntax. Anything it cannot lex with certainty throws
 // UnsupportedSql, and the caller refuses the file instead of guessing.
 export class UnsupportedSql extends Error {}
-function lex(sql) {
+function lex(sql, { compound = false } = {}) {
   const tokens = [];
   let i = 0, code = '';
   const flush = () => { if (code) { tokens.push({ type: 'code', text: code }); code = ''; } };
@@ -97,17 +97,22 @@ export function makeReplaySafe(sql) {
   }
   return out;
 }
-// Lowercase outside quotes, drop identifier quoting and layout. Deliberately conservative:
-// a cosmetic difference is reported as a difference (fail closed), never the reverse.
+// Normalize layout only, never string contents: string literals are copied verbatim; simple quoted
+// identifiers lose their quotes; other quoted identifiers stay verbatim; code is lowercased with
+// whitespace collapsed; the DDL-leading IF NOT EXISTS is the only keyword removed. Deliberately
+// conservative: a cosmetic difference is reported as a difference (fail closed), never the reverse.
+// SQL that cannot be lexed is compared as raw text.
 function normalizeSql(sql) {
-  let out = '', quote = '';
-  for (const ch of String(sql ?? '')) {
-    if (quote) { out += ch; if (ch === quote) quote = ''; continue; }
-    if (ch === "'") { quote = ch; out += ch; continue; }
-    if (ch === '`' || ch === '"' || ch === '[' || ch === ']') continue;
-    out += ch.toLowerCase();
-  }
-  return out.replace(/\s+/g, ' ').replace(/\s*([(),])\s*/g, '$1').replace(/ if not exists/g, '').trim();
+  const text = String(sql ?? '');
+  let tokens;
+  try { tokens = lex(text, { compound: true }); } catch { return 'raw:' + text; }
+  const out = tokens.map(t => {
+    if (t.type === 'string') return t.text;
+    if (t.type === 'ident') return /^[`"[]\w+[`"\]]$/.test(t.text) ? t.text.slice(1, -1) : t.text;
+    if (t.type === 'comment') return ' ';
+    return t.text.toLowerCase().replace(/\s+/g, ' ').replace(/ ?([(),]) ?/g, '$1');
+  }).join('');
+  return out.trim().replace(/^(create (?:unique )?(?:table|index)) if not exists /, '$1 ');
 }
 // Structure including CHECK/DEFAULT/FK/collation/partial-index/WITHOUT ROWID/triggers/views.
 // PRAGMAs give structured facts; normalized sqlite_master.sql covers what PRAGMAs cannot (CHECK, WHERE).
@@ -138,6 +143,7 @@ export function analyze(sql) {
   let statements;
   try { statements = splitStatements(sql); }
   catch (e) { if (e instanceof UnsupportedSql) return { verdict: 'unsupported_sql', reason: e.message }; throw e; }
+  if (!statements.length) return { verdict: 'unsupported_sql', reason: 'no statements' };
   const kinds = statements.map(classify);
   const report = { statements: statements.length, nonAdditive: [], notIfNotExists: [], retryFailsAfter: [],
     convergeMismatch: [], dataPreserved: null,
