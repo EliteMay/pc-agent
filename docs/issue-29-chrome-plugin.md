@@ -83,3 +83,31 @@ ChatGPT Workで検証し、[保存ログ](https://github.com/EliteMay/web-projec
 4. 条件を満たした場合は本人が通常OAuth同意し、まずPC非接触のGateway診断を試す。未認証・拒否・失効・他ユーザー拒否を検証してからPC `ping`に進む。
 
 参照: [OpenAIサポートへの問い合わせ](https://help.openai.com/en/articles/6614161-how-can-i-contact-support)。
+
+## 2026-10-20：Sites保存版2の実装再開（Work実行用・ダミー限定）
+
+### 現在のブロッカー（同じCloudflare監査を繰り返さない）
+
+- 通常チャットから専用Siteプラグイン `gateway_probe({})` を**再実行済み**。応答は `mode: fixed-diagnostic`、`supabase_connected:false`、`pc_connected:false`。公開Siteは未だ固定診断版。
+- [Sites保存版2のWork記録](https://github.com/EliteMay/web-project-data/blob/main/conversations/2026/10/conv-20261009-pc-agent-web-bridge/interactions/2026-10-09/int-20261009T105430Z-sites-redeploy-safety-gate.json) により、2026-10-09時点のSource SHA `63f617624ef192bc397e0b875eda5593bc3ac854`、`deployment_id:null`、20/20テスト・型・lint・build成功、Hosted Secrets 4件の**存在だけ**確認。Workを再開したらSite自身のCurrent SourceとDeploymentを新規に読み、古いSHAを現行扱いしない。
+- Sites保存版2を停止した理由は、Site側 `/oauth/callback?code=...&state=...` のrequest URLがプラットフォームログに残らない保証がないこと。本人管理Cloudflare Workerへqueryを隔離するdummy-only relayは[PR #42](https://github.com/EliteMay/pc-agent/pull/42)で準備済み。署名付き prepare / claim、ダミーcallback 303、D1一回限り消費はCloudflare実環境で過去に本人が検証。現行稼働版とPRビルド完全一致・全ログ層の非保持は未証明であり、実OAuthは引き続き禁止。
+- **この通常チャットにはSites保存版を読む・編集・保存する専用ツールが存在しない**。GitHubのrelayテストが成功してもSiteが更新されたことにはならない。WorkでSiteネイティブの操作が利用できる場合だけ続行。Claude CLIやChatGPT内のClaude連携も未確認であり、第三者に認証情報を送らない。
+
+### Workで実行する次の1タスク（現本番へは非反映）
+
+対象: 所有者本人限定の既存 `Kaito PC Agent Web Bridge` Site。新規Site・新規Cloudflare Worker・別Supabase Projectは作らない。
+
+1. Sites native toolsと該当Siteの書込み可能性を確認し、**保存版2のCurrent Source**、OAuth pending/session D1 schema、owner/HttpOnly session、既存Routes、固定 `gateway_probe` の実装を読み取る。Source SHAと現在のdeployment ID・共有範囲を記録。CLIやCloudflare管理APIでSites内部を勝手に代替しない。
+2. [PR #42 `src/sites-client.mjs`](https://github.com/EliteMay/pc-agent/blob/feat/issue-29-cloudflare-relay-dummy/gateway/cloudflare-callback-relay/src/sites-client.mjs) と [protocol](https://github.com/EliteMay/pc-agent/blob/feat/issue-29-cloudflare-relay-dummy/gateway/cloudflare-callback-relay/src/protocol.mjs) を参照し、既存Site保存版2の**サーバー内**に `/oauth/start`（同一Origin POST/CSRF/本人/HttpOnly session/原子的pending）と `/connect/complete`（同一Origin GET、URL query拒否、pending消費後サーバー署名POST `/claim`）を最小変更で統合する。ブラウザJS・MCPの出力にraw state/code/verifier/tokenを渡さない。
+3. 初回は**in-process mock relay + fake key + dummy-code**だけでエンドツーエンドを確認する。Supabase OAuth authorize/token endpointは**絶対に呼ばず**、`exchangeDummy` は固定値だけで結果を返し、`gateway_authenticated:false`を固定。現行 `gateway_probe` の `supabase_connected:false`、`pc_connected:false`を維持する。Cloudflare実環境のsigned APIを試すのは後段の別ゲート。
+4. 既存保存版2の20テストを壊さず、以下の拒否を追加: 未認証/別owner/別ブラウザ/CSRF・Origin不一致、期限切れ、競合するcomplete、二重claim、誤ったstate、過大レスポンス、非dummyコード、upstream failure、raw callback queryをSiteへ持ち込む動線、クライアントbundle/telemetryの秘密値混入。pendingは原子的に消費し、失敗や拒否の再試行でコード二重取得しない。
+5. 実行可能なテスト、型、lint、buildと差分レビューを行い、保存版に留める。**Cloudflare Worker / D1 / Supabase OAuth App / redirect URI / Sites Hosted Secrets / Sites production deployment / PC を更新しない。** Secrets値を表示・貼付・リポジトリへ保存しない。現在の本番固定Pluginを壊さない。
+6. Work環境にSites書込みCapabilityが無い場合は、必要なネイティブCapability名と拒否理由だけを記録して停止。Relayの監査コードをまた作り足すことや、「mock成功＝本番接続成功」とすることは禁止。レビューが必要なコード差分のみClaudeに共有し、秘密情報やユーザーセッションは共有しない。
+
+### 次ゲート（このタスクには含めない）
+
+保存版でdummy完走した後、実WorkerへSitesサーバーが署名付きPOSTするには両端の共有署名用Secretが必要。保存版2で確認済みのHosted Secrets 4件はOAuth用であり、Relay用Secretの存在は**未確認**。**既存Cloudflare Secretの値を取得・表示・再入力しない。** 共有キーの安全な配布/ローテーション、Live Workerとのバージョン整合、実効ログ設定、予算、本人による別承認を確認してから、ダミー実通信のみに進める。
+
+そのさらに後でのみ、OAuth Appのredirect URI（Site→Worker）とPKCE一致、ログの残存リスクと本人同意を審査する。元のIssue #29の4つの完成条件は未達のまま維持。
+
+**Workに渡す入口:** このセクションのURLと PR #42、Issue #29を参照し、作業範囲は「保存版2のSiteサーバー側dummy relay統合、mockのみ、未deploy」と指定する。
