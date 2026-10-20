@@ -125,3 +125,16 @@ ChatGPT Workで検証し、[保存ログ](https://github.com/EliteMay/web-projec
 - **最小限の次実験:** 本人が対象操作を承認し、正式なSite previewのowner-only経路と署名鍵が整った場合だけ、**real OAuthでないダミー**の`prepare 201 → dummy callback 303（固定URL・queryなし）→ claim 200 → replay 409`、pending/nonce/TTL/暗号文NULL、ブラウザ表示にcode/state非露出を記録。既存公開Pluginは固定診断のまま維持し、実OAuthやPCコマンドを呼ばない。
 - Claude等の追加AIへ依頼するのは同じ障害が複数回再現し、原因を絞る追加レビューが必要な時のみ。Secret・未公開セッション・実OAuthデータを外部へ渡さない。
 
+
+## 2026-10-20：Sites保存版3のプレビュー不成立確認（Work報告）
+
+**結果の出所:** Workが本人に報告した調査・再テストの要約。通常チャットではSitesの内部プレビューや保存版3そのものを直接実行しておらず、独立実証とは区別する。
+
+- **プレビューは起動しなかった**。内部QA用の`http://terminal.local:4173`は保存版3の既定で許可される本番Originと異なり、Sites本人セッションを引き継げることも未確認。保存版3実行入口の`start`/`complete`にはモックが結線されておらず、fail-closedで停止する。プレビューを「本人限定・実ブラウザ検証可能」と判断した以前の提案は取り下げる。
+- **再検証はプロセス内モック統合テストの12/12 PASSのみ。** 同一owner/Cookie/Origin/CSRFの正負、正常系、原子的なpending消費、二重実行、別ブラウザ、未認証、期限切れ、不正URLを含む。使用DBは**メモリ内SQLite**、通信先は**同一プロセスのモック**。Hosted D1、実Worker、ブラウザのSiteセッション、実ログには一切アクセスしていない。
+- Workの前回読み取りでは、SitesのHosted D1 Binding/テーブルはそれぞれ0件、OAuth用Hosted Secrets4件のみ、Relay署名用Secret未登録。今後この状態はSites nativeで再取得して確認する。保存版3は未deployで既存公開Site Pluginは固定診断のまま。
+- **禁止する近道:** preview Originを本番許可リストへ無条件追加、owner認証やCookie/CSRFの迂回、テスト用headerを本番dispatchへ導入、モックを実OAuthの代用にして成功扱い、Secret値をChatGPT/GitHubへ転記。環境により認証・Originを変える時もProductionでfail-closedに保つ。
+- **次の最短ルート:** プレビュー専用コードやモックテストを追加し続けず、Workで実Sites実行環境の正式なBinding/DBプロビジョニング方法、必要なD1 schema/migration、Relay用Secret安全配布/ローテーション、既存`src/sites-client.mjs`を現行Routesへつなぐサーバー限定通信アダプターと保護条件を**読み取り・実装計画**として確定。ログ/rollback/予算と、ダミー通信の最小テスト範囲・止め方を明記する。変更可能な既存Sitesの正式ネイティブ操作とCloudflare Workerを再利用し、新Siteや有料サービスは作らない。
+- **別承認ゲート:** Hosted D1を作成/Bindingしschemaを適用すること、Relay署名用Secretの新規登録や変更、実WorkerへのダミーPOST、Sites preview/productionの実Deploy、Supabase OAuth、家PCの入力/GUIはいずれもこのWork報告で許可されたとはみなさない。現在のWorker Secretは読み出せず、既存keyと異なるkeyで接続は失敗するため、無承認の鍵変更は厳禁。必要な具体的変更を列挙して本人の明示承認を得る。
+- 完成条件の判定は不変。実Site→Worker通信もSupabase→自作Agent→メモ帳も未検証でありIssue #29は継続。
+
