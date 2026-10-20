@@ -249,3 +249,24 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 **残余リスクを明示:** Hosted migrationの履歴/atomicity/retryはOpenAI Supportでも保証されず、Hosted DBのread-only SQL確認UIも公開資料で未案内。失敗してもDB変更が残り得る。version復元はコードのみで、旧env/Secret復元までは保証されない。実Hostedの初回Deployと復旧は**未実測**。
 
 **現時点の判定:** `GO for requesting explicit authorization`、**実際のDeploy権限はまだ与えられていない**。第1目標/Issue #29の4受入条件は未達。
+
+## 2026-10-20 Sites保存版6初回Deploy: succeeded / Plugin診断 -32602
+
+**初回Deploy承認後の本人提供Work readback（Sitesの正式デプロイ結果、通常チャットではDeploy画面へ直接アクセスできない）**
+
+- 本人が承認した**1回限り**の `deploy_private_site_version` で保存版6 `970c7ea993943a6a77cb2eda85112a230fa10fa9` をデプロイ。Workが報告したDeployment: `appgdep_6ad775854dd0819189060d485e6b8572`、status **`succeeded`**、environment revision **5**。
+- 公開URL: `https://kaito-pc-agent-web-bridge.kaito2526.chatgpt.site/`。owner 1 / groups 0 / external viewers 0の本人限定共有を維持。
+- Hosted D1: `DB` bindingと想定4テーブルをSites native管理readbackで確認。4テーブルは空。ソース切替・D1 provision/schema適用・環境revisionの反映を実施。Secrets変更、Relay enable、実OAuth、Worker live通信、PC操作、追加課金承認は**していない**。
+- **Post-deploy regression / STOP:** `gateway_probe({})`がJSON-RPC `-32602`、名前・引数検証で拒否。Workは実際の受信リクエストpayload未観測。原因未確定であり成功Deploymentを「Plugin正常稼働」とみなさない。
+- **この通常チャットの独立再現:** 新しい公開版に対してChatGPTの接続済み`mcp__Kaito_PC_Agent_Web_Bridge__gateway_probe({})`を1回実行し、`INVALID_ARGUMENT / McpServerError: Only named diagnostics with empty arguments are allowed`で失敗。利用可能なツール定義は従来どおり`gateway_probe(args: object)`。現キャッシュの呼び出し定義と新サーバー側のtool dispatch/名前検証/arguments検証が一致するかは**仮説**であり、実受信形状・拒否箇所・コードのreadbackが必要。
+- **状態:** 現公開Siteは新コードのまま、固定Plugin診断は**NG**。再Deploy・自動rollback・Hosted DB削除・手動migration・Secret変更・追加修正は行わずSTOP。旧保存版1に正式再Deployできる見込みはあるが、DB/環境revisionを元へ戻す保証はないため**別の復元判断と承認が必要**。
+- **Issue #29判定:** プラットフォームの初回Deployment/D1作成には進捗があるが、実Pluginの通信は現在失敗、Supabase/Agent/screenshot/GUI/Notepad E2Eは全て未検証。4完成条件は未達。
+
+### 次の限定調査（読み取り・ローカルでのmockのみ）
+
+1. 保存版6の公開成果物とMCP受信経路をread-onlyで確認し、**list_tools/schema、公開ツール名、実際にSiteへ届くJSON-RPC method・params.name・argumentsの型と形状**を、Secretや本人情報を記録せずに照合。受信raw payloadが観測できなければそれを明記。
+2. `Only named diagnostics with empty arguments are allowed`を発している実コード行・呼び出し条件・site tool dispatcher境界（Sites platformかアプリ実装か）を特定。公開前後の`gateway_probe`の登録・名前検証・引数処理を比較し、キャッシュ/ツールdiscoveryの可能性も事実と仮説を分ける。局所mockで同じ入力がなぜ拒否されるか再現し、回帰テスト案を作る。
+3. 原因を限定できるまでコードや設定を変更しない。原因が分かったら最小修正候補を**未公開**で準備し、旧`gateway_probe({})`互換性＋Auth/Relay OFF＋owner-only＋DB 4表既存を検証する。公開版への再Deployは**別途本人承認**。
+4. 診断が壊れたままの利用影響を確認し、復元を推奨する場合はversion1のcode-only復元と環境revision5/DB残存の差異を明確にして承認を取る。自動復元はしない。
+
+**更新による上書きに注意:** 直前のGo/No-Go節の「初回Deploy未実施」は**当時のスナップショット**。現在は**Deploy成功・post-deploy固定診断失敗**が最新。
