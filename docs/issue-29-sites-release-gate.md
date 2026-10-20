@@ -208,3 +208,24 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 4. 復旧・承認前提: Hosted migration runnerは公式保証なし。Sites本番公開、D1生成、SQL適用、Secret変更/登録、実Worker通信、実OAuth、家PC操作、追加課金は**実施しない**。成功してもSites初回Deployは別途本人の明示承認が必要。
 
 **次の結果を判断する基準:** 見逃し修正・回帰PASS・4文のlocal rerun検証・実成果物一致・既存固定診断互換・未公開保存コミットの提示。これは**本番の成功条件ではなく、公開候補レビューを再開できる最低条件**。Issue #29の4完成条件は引き続き未達。
+
+## 2026-10-20 Sites保存版6: local replayとschema照合の不具合修正（未公開）
+
+**証拠の境界:** ChatGPT Workからユーザーが転送した報告。通常チャットからSites内部の保存コミット `970c7ea993943a6a77cb2eda85112a230fa10fa9`、migration生成元、ビルド・CI/実行ログは直接読めていない。報告とGitHub readbackを混同せず、実Hosted成功と扱わない。
+
+- **Site状態:** 保存版6 `970c7ea993943a6a77cb2eda85112a230fa10fa9` を**未公開保存**。現公開固定診断Site、Cloudflare Worker、Hosted D1、Secret、OAuth、家PCの実状態はWorkが変更していないと報告。
+- **schema照合修正:** 引用された列名内の空白を保持し、SQLiteの列・制約・主キー・インデックス・外部キーの構造情報を照合。保存版5で不一致を見逃していた回帰が修正前FAIL→修正後PASS。schema不一致でRelay通信0・固定診断HTTP 200をWork mockで確認。
+- **実migration:** 元の4つのCREATEを `IF NOT EXISTS`化。Drizzleのjournal/snapshotは**変更せず**、Drizzle生成によるschema差分なし、sourceとbuild artifactの内容一致をWorkが報告。保存版6の成果物はPR #42 `7cdd7ab`由来の `migration-safety.mjs`で**local-sqlite-only** `verdict:rerun_safe`、`statements:4`、`retryFailsAfter:[]`、`convergeMismatch:[]`、`dataPreserved:true`（テスト専用無関係テーブルの値）と判定。
+- **検証:** Work報告で**53/53 tests PASS**、type/lint/build PASS、4テーブルの存在/欠落全16状態、既存検証行の保持、same-name異schema拒否、Relay初期OFF、DB/Secret未設定、旧固定診断の互換性を確認。実Hosted D1やWebブラウザで行ったテストではない。
+- **未適用である根拠:** 保存候補が未公開、現公開版にD1宣言がなくWork readbackでBinding 0件という**状況証拠のみ**。Hosted側のmigration historyに直接照会できる保証はない。
+- **未解決:** Hosted migration履歴・トランザクション・部分失敗後のretry/repairはOpenAI Supportでも非公開/無保証。 `IF NOT EXISTS`はschema driftを自動修復せず、schema guardの実ブラウザ/Hosted入口への結線・本番稼働は未検証。初回Deploy失敗後に旧コードへ復元してもD1/files/現envは戻らない。Cloudflare Relay `RELAY_SIGNING_KEY`のSites側登録、feature enable、実Worker dummy通信、OAuth、PC Agent E2Eは別ステップ。
+
+### 次の作業は「追加実装」ではなく最終release go/no-go preflight（読み取り専用）
+
+1. **保存版6の正本と現公開版を横に並べる:** 保存コミット `970c7ea`、現公開Version/Deployment IDと環境revision（旧版の当時のenvと混同禁止）、owner限定共有、Hosted Binding/SQL migration適用順、D1/Secret/Relay flagsを読み取り確認。変更なしで固定 `gateway_probe` が現行版の期待応答であることを確認。
+2. **出荷candidateの最後のfail-closed条件:** 新コードがDB/Secret未設定または4表の部分状態なら既存診断を維持してRelayだけOFFになること、Hosted入口がadapterに未結線か接続フラグOFFであること、公開後も意図せぬOAuth開始やWorker外部アクセスが起きないことを成果物から再確認。公開直後に使う匿名化されたhealthy/unhealthy判定方法、即停止条件と旧コード再デプロイ手順を文書化。
+3. **DB残存リスクを明記し残余リスクの受容可否を判断:** Sitesに正式read-only SQL履歴UIがないため、部分適用時の実DB復旧は保証できない。**「安全と証明済み」ではなく、このリスクを承認するかの判断**。Cloudflare/Secret/実Worker/OAuth/PCへの操作は独立承認を維持。
+4. 最終preflight成功時だけ、**ユーザーへSite初回Deploy（D1新規provision/migration/既存固定診断の公開コード差し替えを伴い得る）を実施するか具体的に承認を依頼**する。承認前のDeployment・SQL適用・Secrets登録・現公開版差し替え・実Worker通信は禁止。Site初回DeployとRelay Secret登録/ダミー実通信を一括で自動実施しない。
+5. Preflightを完了しても、**Issue #29の4条件は実機で確認されるまで未達**。Draft PR #42をmainへmergeしない。
+
+**判断:** 保存版6は「mock/local検証済みのpre-deploy candidate」であって、Hosted migrationの成功確認でも全4完成条件の達成でもない。もし正式なrestore動線や使用量制限の重大不明点でfail-closed条件が確定できないなら、公開を保留する。
