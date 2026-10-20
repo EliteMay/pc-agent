@@ -229,3 +229,23 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 5. Preflightを完了しても、**Issue #29の4条件は実機で確認されるまで未達**。Draft PR #42をmainへmergeしない。
 
 **判断:** 保存版6は「mock/local検証済みのpre-deploy candidate」であって、Hosted migrationの成功確認でも全4完成条件の達成でもない。もし正式なrestore動線や使用量制限の重大不明点でfail-closed条件が確定できないなら、公開を保留する。
+
+## 2026-10-20 保存版6初回Deploy: Go/No-Go preflight（推奨・未承認）
+
+**Work本人提供のreadback（GitHubや通常チャットからSitesのHosted管理状態を直接確認したものではない）:**
+
+- 対象のSites**未公開**保存版6: `970c7ea993943a6a77cb2eda85112a230fa10fa9`。Work判断は**「Relay・実OAuth OFFの保存版6の初回Deployを推奨。ただし本人承認前は未実施」**。
+- 現公開版は保存版1の成功deployment。元の公開時**環境revision 0**に対し、現在のSite保存設定は**revision 5**。コード復元が旧環境やSecretsまで戻す根拠はない。
+- 共有: owner 1名、group 0、external viewer 0。公開環境の可視Hosted D1 Binding 0、table 0。非公開migration historyの不存在は確認できない。
+- 保存版6のソース・ローカル保存アーカイブとbuild 69ファイルは一致とWork報告。migrationは4 CREATE 1ファイル、journal `idx:0`、source/artifact一致、**local `rerun_safe`**。53/53ローカルテスト・型・lint・build成功。DB/Secret未設定・partial tables・schema drift時の固定診断維持、Relay fail-closed、実OAuth OFF、Hosted入口のadapter未結線を検証。
+- Plus hostingは現時点でプランに含まれるとのWork/Help確認。ただしユーザー固有の共有quota残量は取得不可。Quota/課金承認画面が出たら自動承認せず**停止**。
+
+**通常チャットで独立した確認:** 本メモ記載時に自作 `Kaito PC Agent Web Bridge.gateway_probe({})` を実行し、`success:true`、`mode:"fixed-diagnostic"`、`pc_connected:false`、`supabase_connected:false`、`approvals_bypassed:false` を観測。これは**現公開Siteのprobeが動く証拠**であり保存版6のHosted稼働証拠ではない。GitHub PR #42は本節追記前HEAD `ee4dc2bcf74e3de50a4980ac612e8ef06b406418`、Draft/Open。
+
+**承認が必要な最初の操作（一括承認しない）:** 保存版6を**既存owner限定Siteへ**正式な `deploy_private_site_version` で初回Deployすることのみ。環境revision 5と、新規D1 provision・4-table migration・コード公開切替が対象になり得る。**Relay/OAuthの有効化、Secret登録、Cloudflare設定変更、Workerへの通信、PC操作、PR mergeは含めない**。
+
+**直後の観測/停止条件（後続タスクとして順守）:** Deploy結果とversion/deployment status、owner-only共有、固定 `gateway_probe` の前後Contract、現行画面のHosted Binding/table readbackを確認。外部公開範囲の変更、予期しないOAuth/Worker通信、固定probeの破損、quota/課金画面、DB/migrationの部分失敗があれば、追加Deploy・DB修復・Secrets操作をせず**停止して報告**。旧コードversion 1の正式再デプロイは原因・環境差分を確認したうえで別判断。**コード復元でDB/filesは戻らない**。D1のrollback/deleteを自動で行わない。
+
+**残余リスクを明示:** Hosted migrationの履歴/atomicity/retryはOpenAI Supportでも保証されず、Hosted DBのread-only SQL確認UIも公開資料で未案内。失敗してもDB変更が残り得る。version復元はコードのみで、旧env/Secret復元までは保証されない。実Hostedの初回Deployと復旧は**未実測**。
+
+**現時点の判定:** `GO for requesting explicit authorization`、**実際のDeploy権限はまだ与えられていない**。第1目標/Issue #29の4受入条件は未達。
