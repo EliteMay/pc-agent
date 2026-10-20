@@ -282,3 +282,21 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 - **因果関係は未確定:** 現実の失敗したJSON-RPCリクエスト本文は取得できず、`_meta`が付いていたこと自体は仮説。キャッシュや別のパラメータ不一致は排除していない。従って**本番 `gateway_probe` が復旧したとは言わない**。
 - **次の判断:** ユーザーから改めて明示承認を得た場合のみ、既存owner-only Siteに**保存版7だけを正式な `deploy_private_site_version` で1回再Deploy**する。既存D1 Binding/4表、環境revision、共有範囲、schema/SQL適用影響がないことをreadbackし、Deploy statusと接続済み通常ChatGPT `gateway_probe({})` の結果を計測。Probe正常応答にならない/SQL migrate再実行・quota/費用・予期しない設定変更があれば連続再DeployせずSTOP。Secret登録、Relay有効化、Worker live送信、OAuth、PC操作は別承認。
 - **事実/未確認:** GitHubのPR #42は別の管理系。Site保存版7のソース・ログをこの通常チャットから独立取得していない。Hosted runnerの履歴・atomicity・再試行は引き続き保証外。Issue #29の4完成条件は未達。
+
+## 2026-10-20 Sites保存版7: 再Deploy succeeded、固定診断復旧
+
+**Work本人提供のSitesネイティブ管理readback（Deployment/Binding/共有の情報）**
+
+- 既存owner限定Siteへ保存版7 `1d10fc907c0330245d9efa0fd531d9bb8de8b8a6` を、本人の個別承認後に**1回だけ** `deploy_private_site_version`。Deployment ID `appgdep_6ad77b37c0108191af182b13106f4c51` は `succeeded` とWork報告。
+- 公開versionは保存版7。D1は既存の `DB` bindingと4テーブルを保持、migration SQL前回と同一。共有owner 1名のみ、group 0、外部共有0。環境revision 5を保持。
+- Relay・実OAuth OFF。Secret変更、Cloudflare Worker実通信、PC操作、課金操作は未実施。ローカル修正内容は標準MCP `tools/call`の `params._meta` objectを無害なメタデータとして受け入れる対応で、Workで56/56のテスト成功を報告。
+- **公開後の固定 `gateway_probe({})` はWork報告で `success:true` を確認。通常ChatGPTでもこの記録時に自作Plugin `mcp__Kaito_PC_Agent_Web_Bridge__gateway_probe({})` を独立に実行し、次のJSONを取得: `{"success":true,"bridge":"Kaito PC Agent Web Bridge","version":"0.1.0","mode":"fixed-diagnostic","transport":"chatgpt-sites-mcp","pc_connected":false,"supabase_connected":false,"approvals_bypassed":false}`。以前の `INVALID_ARGUMENT / Only named diagnostics with empty arguments are allowed` は本独立実行で再現せず。
+- **証拠の区別:** 通常チャットはPlugin tool応答を独立に確認したが、Sites管理のDeployment/DB/owner-readbackとSiteソースCommitには直接アクセスしていない。旧障害の実受信JSON-RPC `_meta`の有無も未観測のため、`_meta`が本番失敗の唯一の根本原因であったとの断定はしない。
+
+### 次段階のRelease gate: dummy Sites → Cloudflare Worker通信
+
+**現在のPlugin成功は固定diagnostic応答に限る**。Supabase Gateway/家PCの`ping`、screen capture、mouse/keyboard/scroll、Remote Desktop Commander OFF時のメモ帳E2Eは**すべて未達**。実Worker通信、実OAuth/Secretsも未実施。
+
+次はSites version7（owner-only、Relay/OAuth OFF）とPR #42のCloudflare dummy relay構成/既存Worker設定について、**read-only**のsource/artifact/current-hosting readbackを照合する。確認事項: Site側Relay adapterのHosted入口との配線、署名鍵の安全な同一値持込み方法、Worker active Versionとallowlisted origin、本人POST/CSRF、D1 bindingと既存データ非破壊、Cloudflare Free / Sites使用枠。Cloudflare Workerとのdummy実通信に必要な変更だけ最小化し、**実送信・Secret登録・Relay enable・Worker Deploy・課金・OAuth・家PC操作は別々の本人承認まで禁止**。
+
+実際の`gateway_probe`が正常な間は、理由のないSite再Deployやローカルテスト追加を止め、エンドツーエンド経路の阻害要因の特定へ進む。PR #42はDraft維持。
