@@ -188,3 +188,23 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 | 費用・枠 | ユーザー側UIで承認前に確認 | 不明なら中止 |
 
 これらはいずれも「ダミー通信へ進む前の障害を減らす」計画であり、Hosted上での成功を示すものではない。
+
+## 2026-10-20 保存版5実SQLのWork検証: rerun_unsafeとschema照合見逃し
+
+**根拠の区別:** 以下はChatGPT Workからユーザーが転送した**ローカル検証の報告**であり、この通常チャットからSites保存版5内部のSQLとテストログを直接取得していない。Sites/Cloudflare/Hosted DB/Secrets/PCの実設定は変更されていない。
+
+- PR #42固定HEAD: `7cdd7abc2a111a260bd6d3164bee1cc49c5ca290`。Work報告ではmigration-safetyツールのGit blobと対象コミットの一致を確認。
+- Sites未公開保存版5 `4478d3490506340634a58a5b1403c02c97e5a41b` の成果物にmigration SQL `dist/.openai/drizzle/0000_late_wong.sql` が**1件のみ**。Drizzle journal `idx:0`、4 SQL文。Workは保存ソースと成果物SQLの一致も報告。
+- ツール結果（**local-sqlite-only**）: `verdict: rerun_unsafe`、`retryFailsAfter:[1,2,3,4]`、`nonAdditive:[]`、`convergeMismatch:[]`、`dataPreserved:true`、`validator_exit_code:1`。`dataPreserved`はツールが用意した**無関係テーブルの検証行**のみを意味する。
+- `IF NOT EXISTS`を付与した**一時メモリ上の仮案**はローカル `rerun_safe` になるが、同名でschemaが異なるテーブルを黙って保持し得る。この仮案をSites保存版5へ適用していない。Hosted runnerの原子性・retry/履歴・本番復旧保証は依然不明。
+- Workの既存schema照合は、通常の型不一致ならRelayを拒否・通信0で固定診断 HTTP 200を維持。しかし**引用列名内部の空白を正規化で削り、必須列が欠けた構造を一致と誤判定**する不具合を実際に再現。既存mock 13/13 PASSだが当該回帰例は検出できていない。
+- 実Relay Adapterは現時点でHosted入口と未結線、Relay/実OAuthはOFF。本番dummy実通信も実行していない。
+
+### Workでの次工程（未公開保存候補だけ、Hosted未操作）
+
+1. **まずschema照合を最小修正:** 引用識別子・文字列を意味の変わる形で正規化しない。SQLiteの構造情報（例: `PRAGMA table_xinfo`、index/unique/foreign keyなど必要な情報）と宣言した期待schemaを比較し、必須列の欠落・別名・空白違い・型違い・index違いなどをfail-closedとして拒否。引用列名で見逃していた再現ケースの**修正前FAIL / 修正後PASS**を追加する。Relay機能のみOFFになり、固定 `gateway_probe` と既存HTTP応答は壊さない。
+2. **続いてmigration:** `0000_late_wong.sql` が一度もHostedに適用されていないことを再確認。既存ソース/migration journalの正本関係・ビルド時の自動再生成・履歴の整合性を調べ、既存環境/Drizzle規則が許す場合だけ**未公開の次の保存候補**として、4 CREATEそれぞれの `IF NOT EXISTS` 化を評価。生成済み `dist/` を直接編集して完了扱いにしない。Journal/checksum/順序を勝手に偽造・削除しない。不明なら修正案で停止。
+3. 仮案を保存した場合は保存前後の**成果物SQLと保存ソースが一致**することを再確認し、同じPR #42 `7cdd7ab`のローカルツールで再実行。部分適用16パターン（4テーブルの各有無）、same-name schema drift、旧/新コードと未適用/適用済みschemaの交差条件、DB/Secret未設定、Relay OFF、固定診断、POST owner/CSRFをmock/ローカルで検証し、テスト件数・実行環境・source commitを報告する。別ファイルを作成して過去migrationと衝突させない。
+4. 復旧・承認前提: Hosted migration runnerは公式保証なし。Sites本番公開、D1生成、SQL適用、Secret変更/登録、実Worker通信、実OAuth、家PC操作、追加課金は**実施しない**。成功してもSites初回Deployは別途本人の明示承認が必要。
+
+**次の結果を判断する基準:** 見逃し修正・回帰PASS・4文のlocal rerun検証・実成果物一致・既存固定診断互換・未公開保存コミットの提示。これは**本番の成功条件ではなく、公開候補レビューを再開できる最低条件**。Issue #29の4完成条件は引き続き未達。
