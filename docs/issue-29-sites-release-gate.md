@@ -23,6 +23,9 @@ Work上の新たな「公開候補」は既存の**保存版3を基にした未�
 5. **Save/Bundling:** 本人限定共有と現在の公開 `gateway_probe` を維持。保存版3 `bbb15b2` はSite Work側の保存コミットであり、PRのGitHub SHAと混同しない。候補のWork commit、bundle digest、migration ID、既存公開Version/deployment IDを記録してから判断。
 6. **最低限のテスト:** 旧20＋新12だけでなく、`DB` bindingなし・schema未適用・Relay secretなしでも固定診断の既存応答を維持するテスト、OAuth禁止・Relay機能OFF・失敗応答の匿名化、owner/CSRF/replay/timeout、Browser bundle Secret marker 0、`node --test`/type/lint/buildを確認する。既存のテスト件数やPASSを実クラウド成功と誤認しない。
 
+
+7. **CSRF追加レビュー: state-changing GET:** GitHubの現行 `gateway/cloudflare-callback-relay/src/sites-client.mjs` は `GET /connect/complete` で`consumePending`→署名付き`/claim`を呼び得る。通常のSite saved-v3コードにさらに保護があるかは未確認だが、認証付きブラウザが他Originから強制遷移されるとpendingを破棄させられる可能性がある。**同じOriginのGETを表示/検証だけにし、本人セッション由来のCSRFを伴う同一Origin POSTでconsume/claimする案**をWorkで既存Routeと照合。安全なPOST動線・Cookie検証・query-free callback 303を両立できるまで実OAuthを有効にしない。モックテストの通過だけで、実ブラウザのCSRF安全性は証明できない。
+
 ## 2. Hosted D1作成とmigrationの安全ゲート
 
 **重要:** Work readbackではD1単独作成コマンドが見つからず、Sites managed deployに連動してDB作成/Schema migrationが**コード公開前に先行し得る**。初回デプロイを「DBだけ構築」目的で実行しない。
