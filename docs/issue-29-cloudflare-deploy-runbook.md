@@ -103,6 +103,29 @@ node tools/deploy-preflight.mjs "C:\\private\\private-wrangler.json" "C:\\privat
 - 次の最小Read-only Evidenceは、Cloudflare Dashboardで稼働Versionと旧Versionの**個別バージョン詳細**（Secret値は伏せた状態）を確認し、Code/Bindings/Compatibility Date/D1接続先を比較すること。正規の短期`Workers Scripts Read` API資格情報を本人が後で承認した場合だけ、固定Version IDを指定した`GET /versions/{id}`を使う。いずれもSecret等値の同一性の証明にはならない。
 - CodeのrollbackはD1の状態を巻き戻さず、CloudflareのRollbackは即100%配信となるため、将来の実行には別途明示承認が必要。[Cloudflare Workers Version](https://developers.cloudflare.com/workers/versions-and-deployments/) / [Rollback](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/) / [Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。
 
+### 2026-10-20 既存Wrangler認証で現行版と直前版を直接比較（実Cloudflare API/CLI）
+
+**新しいAPIトークンの発行なし。** 本人管理Windows PC上に既に存在したWrangler 4系の認証セッションを開発調査の補助として使用し、`wrangler whoami`（成功）、`versions list --json`（9件取得）、`versions view --json`（2版）、`deployments status --json`を読み取り専用で実行。実際のAPI出力は本人PCのプロセス内でのみ解析し、ChatGPTへは固定ラベル・Boolean・件数のみを返した。Token、Secret値、Binding本文、レスポンス全文、完全版UUID、ハッシュそのものは表示・保存していない。外部PC操作ツールは**調査の補助**であり、自作Plugin/Agentの通信が成功した証拠にはしない。
+
+| 実環境readback | 現在 `61aeecd8` vs 旧 `e8e7d859` |
+| --- | --- |
+| バージョン一覧 | 9件。両prefixが各1件だけ存在。詳細の完全IDが一覧と一致 |
+| 稼働Deployment | 現行`61aeecd8`が単一Versionで100%配信（読み取り後の再取得） |
+| script ETag | 両方存在、**不一致**。同一コードと断定不可 |
+| `fetch`/`scheduled` handlers | 一致 |
+| compatibility_date / flags | 一致 |
+| Binding集合 | 各5件、名前集合・型すべて一致 |
+| D1 `DB` reference ID | 両方にあり、**一致** |
+| `RELAY_MODE` | 両方`dummy` |
+| `RELAY_ORIGIN` | 一致 |
+| `RELAY_SIGNING_KEY` / `RELAY_STORAGE_KEY` | 両方存在、Binding型一致。**値・鍵版・暗号学的な同一性は未確認** |
+
+**解釈・停止条件:** CloudflareのVersion情報はハンドラー、runtime、Binding、script ETagを返すが、これらのmetadata一致だけでは現行D1保存データとの完全な互換性、鍵内容の同一性、リクエストの実動作、内部ログ非保持、ロールバック実行可否は証明できない。特に現行版は`RELAY_SIGNING_KEY`更新イベント後であり、旧版への差し戻しは署名済みリクエスト・pendingとの不整合を招く可能性がある。ETagが異なるのでコード面も同一とみなさない。
+
+**結論：旧`e8e7d859`を安全なRollback先として認定しない。** 更新・Secret再入力・D1復旧・トラフィック変更・実OAuthは今回一切実施していない。今後はrollbackのための手順を過剰に増やさず、Issue #29の自作Plugin/Agent通信確立を優先する。
+
+根拠: [Cloudflare Versions API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/get/)、[Versions and Deployments](https://developers.cloudflare.com/workers/versions-and-deployments/)、[Rollback](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/)。
+
 ## 4. 異常時のコードロールバック（**未許可・現段階では実行禁止**）
 
 - 旧Version IDとそのBindings互換を再確認。別のVersionへ誤ロールバックしない。Cloudflare公式Dashboard > Workers & Pages > 対象Worker > Deployments > **旧VersionのRollback**、または本人が許可した`wrangler rollback <OLD_VERSION_ID> --name kaito-oauth-callback-relay-dummy`を使用。
