@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { analyze, makeReplaySafe, splitStatements, classify, fingerprint } from '../tools/migration-safety.mjs';
+import { analyze, makeReplaySafe, splitStatements, classify, fingerprint, UnsupportedSql } from '../tools/migration-safety.mjs';
 
 const plain = 'CREATE TABLE a(id TEXT PRIMARY KEY, x INTEGER NOT NULL);\nCREATE INDEX a_x ON a(x);\nCREATE TABLE b(id TEXT PRIMARY KEY);';
 const shape = ddl => { const db = new DatabaseSync(':memory:'); db.exec('PRAGMA foreign_keys=OFF;' + ddl); const f = fingerprint(db); db.close(); return f; };
@@ -90,4 +90,37 @@ test('Cloudflare relay migration 0001 (NOT the Sites saved-v5 SQL) is additive b
   assert.equal(r.nonAdditive.length, 0);
   assert.equal(r.verdict, 'rerun_unsafe');
   assert.equal(analyze(makeReplaySafe(sql)).verdict, 'rerun_safe');
+});
+
+test('regression: makeReplaySafe leaves string literals and comments untouched', () => {
+  const input = "CREATE TABLE x(id TEXT DEFAULT 'CREATE TABLE y');\n-- CREATE TABLE mention\n/* CREATE INDEX z */";
+  assert.equal(makeReplaySafe(input),
+    "CREATE TABLE IF NOT EXISTS x(id TEXT DEFAULT 'CREATE TABLE y');\n-- CREATE TABLE mention\n/* CREATE INDEX z */");
+  const quotedName = 'CREATE TABLE `CREATE TABLE q`(id TEXT);--> statement-breakpoint\nCREATE UNIQUE INDEX "CREATE INDEX w" ON `CREATE TABLE q`(id);';
+  const fixed = makeReplaySafe(quotedName);
+  assert.match(fixed, /^CREATE TABLE IF NOT EXISTS `CREATE TABLE q`/);
+  assert.match(fixed, /CREATE UNIQUE INDEX IF NOT EXISTS "CREATE INDEX w"/);
+  assert.equal(makeReplaySafe(fixed), fixed, 'idempotent');
+  assert.equal(fixed.split('IF NOT EXISTS').length - 1, 2);
+});
+
+test('regression: splitStatements keeps -- and /* inside strings and quoted identifiers', () => {
+  assert.deepEqual(splitStatements("CREATE TABLE t(name TEXT DEFAULT 'ab--cd');"), ["CREATE TABLE t(name TEXT DEFAULT 'ab--cd')"]);
+  assert.deepEqual(splitStatements("CREATE TABLE t(a TEXT DEFAULT '/* no */; x', \"b--c\" TEXT);"),
+    ["CREATE TABLE t(a TEXT DEFAULT '/* no */; x', \"b--c\" TEXT)"]);
+  assert.deepEqual(splitStatements("CREATE TABLE t(a TEXT DEFAULT 'it''s -- ok');"), ["CREATE TABLE t(a TEXT DEFAULT 'it''s -- ok')"]);
+  assert.equal(splitStatements("CREATE TABLE t(a TEXT DEFAULT '--> statement-breakpoint');").length, 1, 'marker inside a string is not a separator');
+  assert.equal(analyze("CREATE TABLE t(name TEXT DEFAULT 'ab--cd');").verdict, 'rerun_unsafe');
+  assert.equal(analyze(makeReplaySafe("CREATE TABLE t(name TEXT DEFAULT 'ab--cd');")).verdict, 'rerun_safe');
+});
+
+test('hard-to-lex SQL is refused, never guessed', () => {
+  for (const sql of ["CREATE TABLE t(a TEXT DEFAULT 'oops);", 'CREATE TABLE t(a TEXT); /* open',
+    'CREATE TABLE `t(a TEXT);', 'CREATE TABLE t(a TEXT); CREATE TRIGGER g AFTER INSERT ON t BEGIN SELECT 1; END;',
+    'CREATE TABLE t(a TEXT CHECK(CASE WHEN a THEN 1 END));']) {
+    assert.throws(() => splitStatements(sql), UnsupportedSql);
+    assert.throws(() => makeReplaySafe(sql), UnsupportedSql);
+    assert.equal(analyze(sql).verdict, 'unsupported_sql');
+  }
+  assert.equal(analyze('CREATE TABLE t(a TEXT REFERENCES missing(id)); CREATE INDEX i ON nope(a);').verdict, 'unsupported_sql');
 });

@@ -165,6 +165,8 @@ Issue #29の4つのPC操作完成条件はすべて未検証・未達を維持�
 | **区別が必要** | `verdict: rerun_safe` は**再実行可能性だけ**。既存の同名表が期待構造かは**保証しない**。`IF NOT EXISTS` は別構造の既存表を黙って残す場合がある（出力 `existingSchema.sameNameDifferentShape[].sqlOutcome` が `silently_accepted`）。後続の文（例: 存在しない列へのindex）が失敗するとloudなエラーになるが、これは偶然であり互換性の保証ではない。常に `existingSchema.requiresRuntimeFingerprintCheck: true` とし、実行時に `fingerprint()` 相当で照合してRelay機能のみfail-closedにする必要がある |
 | 指紋の性質 | sqlite_master.sqlの正規化文字列も含む保守的比較。見た目だけの違いを「差異」と判定し得る（fail-closed側）。文字列リテラルは大文字小文字を区別する |
 
+SQLの解析は最小の字句解析（文字列・引用識別子・コメントを分離）で行い、`IF NOT EXISTS`の付与は文頭のCREATE TABLE/INDEXのコード部分に限る。文字列リテラル・コメント・引用識別子は改変しない（回帰テストあり）。字句を確定できないSQL（閉じない引用/コメント、`BEGIN`/`TRIGGER`/`CASE`を含む複合文）は推測せず `verdict: unsupported_sql` で拒否し、空DBで実行できないSQLも同様。拒否は「安全」ではなく「未判定」を意味する。
+
 実行: `node --no-warnings=ExperimentalWarning tools/migration-safety.mjs --suggest <file.sql>`（終了コード0＝`rerun_safe`のみ）。出力は構造のSHA-256のみで、SQL本文は出さない。
 
 ### 対象の混同を避ける

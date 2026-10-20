@@ -18,33 +18,84 @@ const NAME = '[`"\\[]?\\w+[`"\\]]?';
 const TABLE = new RegExp(`^CREATE\\s+TABLE\\s+(IF\\s+NOT\\s+EXISTS\\s+)?(${NAME})`, 'i');
 const INDEX = new RegExp(`^CREATE\\s+(UNIQUE\\s+)?INDEX\\s+(IF\\s+NOT\\s+EXISTS\\s+)?(${NAME})`, 'i');
 
-function stripComments(sql) {
-  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
-}
-export function splitStatements(sql) {
-  const parts = /-->\s*statement-breakpoint/.test(sql) ? sql.split(/-->\s*statement-breakpoint/) : [sql];
-  const out = [];
-  for (const part of parts) {
-    let cur = '', quote = '';
-    for (const ch of stripComments(part)) {
-      if (quote) { cur += ch; if (ch === quote) quote = ''; continue; }
-      if (ch === "'" || ch === '"' || ch === '`') { quote = ch; cur += ch; continue; }
-      if (ch === ';') { out.push(cur); cur = ''; continue; }
-      cur += ch;
+// Minimal SQLite lexer. It only separates strings / quoted identifiers / comments from code so
+// they are never edited or mistaken for syntax. Anything it cannot lex with certainty throws
+// UnsupportedSql, and the caller refuses the file instead of guessing.
+export class UnsupportedSql extends Error {}
+function lex(sql) {
+  const tokens = [];
+  let i = 0, code = '';
+  const flush = () => { if (code) { tokens.push({ type: 'code', text: code }); code = ''; } };
+  const quoted = (close) => { // doubled close char is an escape ('' "" ``); ] has no escape
+    let j = i + 1;
+    for (;;) {
+      if (j >= sql.length) throw new UnsupportedSql('unterminated quote');
+      if (sql[j] === close) { if (close !== ']' && sql[j + 1] === close) { j += 2; continue; } break; }
+      j++;
     }
-    out.push(cur);
+    return j + 1;
+  };
+  while (i < sql.length) {
+    const c = sql[i];
+    if (c === "'" || c === '"' || c === '`' || c === '[') {
+      flush(); const end = quoted(c === '[' ? ']' : c);
+      tokens.push({ type: c === "'" ? 'string' : 'ident', text: sql.slice(i, end) }); i = end;
+    } else if (c === '-' && sql[i + 1] === '-') {
+      flush(); let end = sql.indexOf('\n', i); if (end < 0) end = sql.length;
+      tokens.push({ type: 'comment', text: sql.slice(i, end) }); i = end;
+    } else if (c === '/' && sql[i + 1] === '*') {
+      flush(); const end = sql.indexOf('*/', i + 2);
+      if (end < 0) throw new UnsupportedSql('unterminated comment');
+      tokens.push({ type: 'comment', text: sql.slice(i, end + 2) }); i = end + 2;
+    } else { code += c; i++; }
   }
-  return out.map(s => s.trim()).filter(Boolean);
+  flush();
+  for (const t of tokens) if (t.type === 'code' && /\b(begin|trigger|case)\b/i.test(t.text)) throw new UnsupportedSql('compound statement');
+  return tokens;
+}
+const BREAKPOINT = /^-->\s*statement-breakpoint\s*$/;
+export function splitStatements(sql) {
+  const out = [];
+  let cur = '';
+  const end = () => { if (cur.trim()) out.push(cur.trim()); cur = ''; };
+  for (const t of lex(sql)) {
+    if (t.type === 'comment') { if (BREAKPOINT.test(t.text)) end(); else cur += ' '; }
+    else if (t.type === 'code') { const parts = t.text.split(';'); parts.forEach((x, k) => { if (k) end(); cur += x; }); }
+    else cur += t.text;
+  }
+  end();
+  return out;
 }
 export function classify(statement) {
   if (TABLE.test(statement)) return { kind: 'create_table', replaySafe: !!statement.match(TABLE)[1] };
   if (INDEX.test(statement)) return { kind: 'create_index', replaySafe: !!statement.match(INDEX)[2] };
   return { kind: 'non_additive', replaySafe: false };
 }
-// Proposed fix: add IF NOT EXISTS to additive CREATEs only. Never touches other SQL.
+// Proposed fix: add IF NOT EXISTS to additive CREATE TABLE/INDEX only, and only where the
+// statement starts (code text). Strings, quoted identifiers and comments are copied verbatim.
+// Unlexable SQL is returned unchanged by throwing UnsupportedSql to the caller.
 export function makeReplaySafe(sql) {
-  return sql.replace(/\bCREATE(\s+UNIQUE)?\s+(TABLE|INDEX)\s+(?!IF\s+NOT\s+EXISTS)/gi,
-    (_, unique = '', kind) => `CREATE${unique} ${kind} IF NOT EXISTS `);
+  let atStart = true, out = '';
+  for (const t of lex(sql)) {
+    if (t.type === 'code') {
+      let text = t.text, pos = 0, built = '';
+      for (;;) {
+        const semi = text.indexOf(';', pos), seg = semi < 0 ? text.slice(pos) : text.slice(pos, semi);
+        built += atStart
+          ? seg.replace(/^(\s*CREATE(?:\s+UNIQUE)?\s+(?:TABLE|INDEX)\s+)(?!IF\s+NOT\s+EXISTS)/i, '$1IF NOT EXISTS ')
+          : seg;
+        if (seg.trim()) atStart = false;
+        if (semi < 0) break;
+        built += ';'; atStart = true; pos = semi + 1;
+      }
+      out += built;
+    } else {
+      if (t.type === 'comment' && BREAKPOINT.test(t.text)) atStart = true;
+      else if (t.type !== 'comment') atStart = false;
+      out += t.text;
+    }
+  }
+  return out;
 }
 // Lowercase outside quotes, drop identifier quoting and layout. Deliberately conservative:
 // a cosmetic difference is reported as a difference (fail closed), never the reverse.
@@ -84,7 +135,9 @@ function tryRun(db, statements) {
 }
 
 export function analyze(sql) {
-  const statements = splitStatements(sql);
+  let statements;
+  try { statements = splitStatements(sql); }
+  catch (e) { if (e instanceof UnsupportedSql) return { verdict: 'unsupported_sql', reason: e.message }; throw e; }
   const kinds = statements.map(classify);
   const report = { statements: statements.length, nonAdditive: [], notIfNotExists: [], retryFailsAfter: [],
     convergeMismatch: [], dataPreserved: null,
@@ -96,7 +149,9 @@ export function analyze(sql) {
   });
   if (report.nonAdditive.length) return { ...report, verdict: 'not_additive' };
 
-  const clean = new DatabaseSync(':memory:'); run(clean, statements);
+  const clean = new DatabaseSync(':memory:');
+  try { run(clean, statements); }
+  catch (e) { clean.close(); return { ...report, verdict: 'unsupported_sql', reason: 'does not run on an empty database' }; }
   const expected = fingerprint(clean); clean.close();
 
   // Crash after k committed statements, then the whole file is run again.
