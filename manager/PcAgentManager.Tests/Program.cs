@@ -210,6 +210,42 @@ Run("Game Safety can defer configured auto-start until game exit", () =>
     Require(exit.ShouldResumeAgent, "deferred auto-start should run after game");
 });
 
+Run("Desktop Commander is optional: off by default, and a disabled supervisor never launches anything", () =>
+{
+    var defaults = new AgentConfiguration();
+    Require(!defaults.ManageDesktopCommanderRemote, "Desktop Commander management must be off by default");
+    Equal("", defaults.DesktopCommanderStartScript, "no Desktop Commander start script by default");
+
+    var withoutDesktopCommander = new AgentConfiguration
+    {
+        EndpointUrl = "https://example.test/functions/v1/pc-agent-device",
+        DeviceId = "11111111-1111-4111-8111-111111111111",
+        DeviceToken = "a-very-long-device-secret-token",
+        AllowedRoots = [@"D:\AI"],
+        ManageDesktopCommanderRemote = false
+    };
+    var validation = AgentConfigurationValidator.Validate(withoutDesktopCommander);
+    Require(validation.IsValid, "a configuration without Desktop Commander must be valid: " + string.Join("; ", validation.Errors));
+
+    var logPath = Path.Combine(Path.GetTempPath(), "PcAgentManagerTests", Guid.NewGuid().ToString("N"), "manager.log");
+    using var supervisor = new DesktopCommanderRemoteSupervisor(new ManagerLogger(logPath));
+    // Even with a start script configured, a disabled supervisor must not start or track any process.
+    supervisor.Configure(false, @"C:\Windows\System32\cmd.exe");
+    supervisor.StartAsync().GetAwaiter().GetResult();
+    Equal("Disabled", supervisor.State, "disabled supervisor must stay Disabled");
+    // StopAsync is deliberately not called: it also ends any externally started Desktop Commander,
+    // which must never happen to a developer's machine from a unit test.
+});
+
+Run("Game Safety and emergency stop need no Desktop Commander", () =>
+{
+    var state = new GameSafetyState();
+    var enter = state.Observe(gameRunning: true, agentRunning: true);
+    Require(enter.ShouldPauseAgent, "a protected game must pause the Agent without any Desktop Commander");
+    var exit = state.Observe(gameRunning: false, agentRunning: false);
+    Require(exit.ShouldResumeAgent, "the Agent resumes after the game ends");
+});
+
 Run("Emergency stop persists until explicitly cleared", () =>
 {
     var root = Path.Combine(Path.GetTempPath(), "PcAgentManagerTests", Guid.NewGuid().ToString("N"));

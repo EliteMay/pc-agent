@@ -149,3 +149,7 @@ Common dependency/metadata directories such as `.git`, `node_modules`, `.next`, 
 ## Capture geometry (2026-10-21)
 
 `capture_notepad` returns, when the Agent provides it, a `geometry` object (source-pixel `window_width/height` and the client-area rectangle `client_x/y/width/height`) and a `click_mapping` formula. `notepad_gui` `click` takes client-area pixels, so an image point maps as `x = round(px * window_width / width) - client_x`. Older Agents (0.11.4) send no geometry and the field is omitted; malformed geometry is dropped without failing the capture.
+
+## Deployed-version check (read-only)
+
+`VERSION` in `oauth-pc-agent` is "10" from the capture-geometry change; earlier changes (capture, GUI tools) did not bump it, so "9" cannot tell whether those tools were deployed. The version is only visible to an authenticated caller (`GET` after OAuth). `pc-agent-device` reports its version (`"2"`) without authentication, but it was also not bumped by the capture changes. To verify what is deployed, compare the deployed function source (Supabase dashboard or a read-only Supabase connector) with `scripts/Get-GatewaySourceHash.ps1` output for the intended commit.

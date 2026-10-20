@@ -4,7 +4,7 @@ import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
-const VERSION = "9";
+const VERSION = "10";
 const MCP_WAIT_MS = 120000;
 
 const READ_ONLY_TOOLS = new Set([
