@@ -10,6 +10,12 @@ function reply(overrides = {}) {
     width: 640,
     height: 480,
     image_base64: jpeg,
+    window_width: 1000,
+    window_height: 750,
+    client_x: 8,
+    client_y: 39,
+    client_width: 984,
+    client_height: 703,
     ...overrides
   });
 }
@@ -62,7 +68,15 @@ test("capture uses only the fixed Windows PowerShell executable without a shell"
     mime_type: "image/jpeg",
     image_base64: jpeg,
     width: 640,
-    height: 480
+    height: 480,
+    geometry: {
+      window_width: 1000,
+      window_height: 750,
+      client_x: 8,
+      client_y: 39,
+      client_width: 984,
+      client_height: 703
+    }
   });
   assert.equal(calls.length, 1);
   const [exe, args, options] = calls[0];
@@ -119,6 +133,15 @@ test("capture rejects corrupt metadata, oversized images and invalid base64", ()
     reply({ mime_type: "image/png" }),
     reply({ width: 961 }),
     reply({ height: 721 }),
+    reply({ window_width: undefined }),
+    reply({ window_width: 63 }),
+    reply({ window_height: 2161 }),
+    reply({ client_x: -1 }),
+    reply({ client_x: 1000 }),
+    reply({ client_width: 0 }),
+    reply({ client_width: 993 }),
+    reply({ client_height: 712 }),
+    reply({ client_y: 1.5 }),
     reply({ image_base64: Buffer.from("text").toString("base64") }),
     reply({ image_base64: "!" }),
     reply({ image_base64: jpeg + " " }),
@@ -162,4 +185,30 @@ test("Windows capture fails closed without a usable absolute temporary directory
     tool.execute({}),
     (error) => error?.code === "TEMP_DIRECTORY_UNAVAILABLE"
   );
+});
+
+test("a capture without geometry (older helper or unmeasurable client area) is still accepted, without a geometry field", () => {
+  const keys = ["window_width", "window_height", "client_x", "client_y", "client_width", "client_height"];
+  const bare = JSON.parse(reply());
+  for (const key of keys) delete bare[key];
+  const result = parseNotepadCapture(JSON.stringify(bare));
+  assert.equal(result.width, 640);
+  assert.equal(Object.hasOwn(result, "geometry"), false);
+  // null / partial sets are corrupt, not "absent"
+  assert.throws(() => parseNotepadCapture(JSON.stringify({ ...bare, window_width: 1000 })), (e) => e?.code === "INVALID_CAPTURE_RESULT");
+  assert.throws(() => parseNotepadCapture(JSON.stringify({ ...JSON.parse(reply()), client_x: null })), (e) => e?.code === "INVALID_CAPTURE_RESULT");
+});
+
+test("geometry lets a screenshot pixel be converted to the client coordinates notepad_gui click expects", () => {
+  const { geometry, width, height } = parseNotepadCapture(reply({
+    width: 500, height: 375, window_width: 1000, window_height: 750,
+    client_x: 8, client_y: 40, client_width: 984, client_height: 702
+  }));
+  const scale = geometry.window_width / width;
+  assert.equal(scale, 2);
+  assert.equal(geometry.window_height / height, 2);
+  // The image pixel at the top-left of the client area maps to click (0, 0).
+  const click = (px, py) => ({ x: Math.round(px * scale) - geometry.client_x, y: Math.round(py * scale) - geometry.client_y });
+  assert.deepEqual(click(4, 20), { x: 0, y: 0 });
+  assert.deepEqual(click(250, 200), { x: 492, y: 360 });
 });

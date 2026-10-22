@@ -6,6 +6,10 @@ using System.Runtime.InteropServices;
 public static class PcAgentWindowCapture {
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref POINT point);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
@@ -44,6 +48,29 @@ $width = $rect.Right - $rect.Left
 $height = $rect.Bottom - $rect.Top
 if ($width -lt 64 -or $height -lt 64 -or $width -gt 3840 -or $height -gt 2160) {
     throw 'Notepad dimensions are outside capture limits.'
+}
+# Same client-area definition notepad_gui click uses, expressed relative to the captured window image.
+# Geometry is advisory: if it cannot be measured sanely the screenshot is still returned without it.
+$client = [PcAgentWindowCapture+RECT]::new()
+$origin = [PcAgentWindowCapture+POINT]::new()
+$geometry = $null
+if ([PcAgentWindowCapture]::GetClientRect($hwnd, [ref]$client) -and
+    [PcAgentWindowCapture]::ClientToScreen($hwnd, [ref]$origin)) {
+    $clientX = $origin.X - $rect.Left
+    $clientY = $origin.Y - $rect.Top
+    $clientWidth = $client.Right - $client.Left
+    $clientHeight = $client.Bottom - $client.Top
+    if ($clientX -ge 0 -and $clientY -ge 0 -and $clientWidth -ge 1 -and $clientHeight -ge 1 -and
+        $clientX + $clientWidth -le $width -and $clientY + $clientHeight -le $height) {
+        $geometry = @{
+            window_width = $width
+            window_height = $height
+            client_x = $clientX
+            client_y = $clientY
+            client_width = $clientWidth
+            client_height = $clientHeight
+        }
+    }
 }
 $source = [System.Drawing.Bitmap]::new($width, $height)
 try {
@@ -85,6 +112,7 @@ try {
                     height = $outHeight
                     target = 'notepad'
                 }
+                if ($null -ne $geometry) { foreach ($key in $geometry.Keys) { $payload[$key] = $geometry[$key] } }
                 [Console]::Out.WriteLine(($payload | ConvertTo-Json -Compress))
             } finally { $stream.Dispose() }
         } finally { $encoderParams.Dispose() }

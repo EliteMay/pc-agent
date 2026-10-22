@@ -35,3 +35,15 @@
 4. Reconnect or refresh the existing Private Plugin so that it advertises `capture_notepad`; do not create a separate third-party remote-control runtime.
 5. With Desktop Commander stopped and VALORANT closed, open only one harmless Notepad window. Request `capture_notepad` through the own plugin, approve locally, and verify the image shows only that window.
 6. Confirm the database command result is redacted after delivery; then implement mouse, keyboard, and scrolling under a separate security-checked change to complete all four gates of Issue #29.
+
+## 2026-10-21 Click coordinate mapping (code fix, not yet validated on the home PC)
+
+**Problem (found by code review, not by a physical run):** `capture_notepad` returns the whole window rectangle (title bar included) downscaled to at most 960 x 720 and reported only the scaled size, while `notepad_gui` `click` takes **client-area** pixels. A coordinate read off the image was therefore off by the downscale factor and the title-bar offset, with no data to correct it.
+
+**Change:** the capture helper additionally reports the source window size and the client-area rectangle relative to the captured window (`window_width/height`, `client_x/y`, `client_width/height`, source pixels). The Agent validates them (all required, bounded, client area inside the window) and returns them as `geometry`. The OAuth gateway forwards `geometry` plus a one-line `click_mapping` formula when present and drops it silently from older Agents. `click` semantics are unchanged.
+
+**Compatibility:** geometry is advisory. If the helper cannot measure a sane client rectangle it omits the fields and the screenshot is still returned; a partial or out-of-range set is rejected as corrupt. Older Agents (0.11.4) send none and the gateway omits `geometry`.
+
+**Mapping:** for an image point (px, py): `x = round(px * window_width / width) - client_x`, `y = round(py * window_height / height) - client_y`.
+
+**Verification status:** Agent unit tests, PowerShell parse and C# compile are local evidence only. The geometry addition itself has **not** been run against a real Notepad window (earlier development smoke tests of capture/click/scroll on the home PC are recorded in PRs #32-#34, but predate this change), DPI scaling other than 100% is untested, and the gateway change is verified by CI `deno check` only. Needs the install and the physical run in the Issue #29 gate list.
