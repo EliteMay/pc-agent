@@ -1,0 +1,25 @@
+name: Site OAuth reference CI
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths: ['gateway/site-oauth-reference/**', '.github/workflows/site-oauth-reference-ci.yml', '.node-version']
+  pull_request:
+    paths: ['gateway/site-oauth-reference/**', '.github/workflows/site-oauth-reference-ci.yml', '.node-version']
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    defaults:
+      run:
+        working-directory: gateway/site-oauth-reference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+      - run: npm test
