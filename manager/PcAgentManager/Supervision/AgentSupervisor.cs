@@ -142,7 +142,7 @@ public sealed class AgentSupervisor : IAsyncDisposable
             startInfo.Environment["PC_AGENT_JOURNAL_PATH"] = _paths.JournalPath;
             startInfo.Environment["PC_AGENT_PIPE_NAME"] = _pipeName;
             startInfo.Environment["PC_AGENT_LOCAL_APPROVAL_SECRET"] = _localApprovalSecret;
-            startInfo.Environment["PC_AGENT_VERSION"] = "0.11.5";
+            startInfo.Environment["PC_AGENT_VERSION"] = "0.11.6";
 
             var process = new Process
             {
