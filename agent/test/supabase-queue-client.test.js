@@ -244,3 +244,21 @@ test("runQueueOnce reports duplicate operations without re-executing", async () 
     journal.close();
   }
 });
+
+test("rejects endpoint credentials and URL parameters before sending device tokens", () => {
+  const unsafe = [
+    "https://user:pass@example.test/functions/v1/pc-agent-device",
+    "https://user@example.test/functions/v1/pc-agent-device",
+    "https://example.test/functions/v1/pc-agent-device?redirect=https://evil.example",
+    "https://example.test/functions/v1/pc-agent-device#fragment"
+  ];
+  for (const endpointUrl of unsafe) {
+    assert.throws(
+      () => new SupabaseQueueClient({
+        endpointUrl, deviceToken: "device-secret", deviceId,
+        fetchImpl: async () => { throw new Error("must not send token"); }
+      }),
+      /credentials|query parameters|fragments/i
+    );
+  }
+});
