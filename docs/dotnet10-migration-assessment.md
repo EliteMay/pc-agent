@@ -30,5 +30,13 @@
 - 配布物検証に `-MinimumDotNetRuntime` を追加（埋め込み `runtimeconfig` の `Microsoft.NETCore.App` 版を、実行せずに読んで下限と比較）。下限は `.dotnet-runtime-version`（10.0.13）。
 - 依存パッケージの版は据え置き（CIの警告を見て判断）。
 
-## 4. 検証状況
-CIの結果とこの文書の「検証結果」節を参照。**ReleaseとShipには、実機でのヘルスチェック・ローカル承認・緊急停止・Game Safetyの確認が別途必要。**
+## 4. 検証結果（CI、コミット `58a26ae`）
+Manager CI（`windows-latest`、.NET 10 SDK）の全ステップが成功: Node テスト、Manager の restore／build、**Manager 回帰テスト（net10.0-windows、自己完結）**、publish、portable bundle の組み立て（新しい実行ファイルの `--bundle-check`）、**配布物検証（Node ≥ 22.23.4、埋め込み .NET ランタイム ≥ 10.0.13 の下限つき）**、成果物アップロード。Agent CI も成功。ビルド警告のアノテーションなし（GitHub Actions 側の Node 20 非推奨通知のみ）。
+
+**未検証（実機でのみ確認可能）:** Named Pipe（Manager↔Agent）の実動作、ローカル承認ダイアログの表示、緊急停止の実機動作、Game Safety（ゲーム検出時の一時停止）、実際の `device-token.bin` のDPAPI復号、.NET 8 Manager から .NET 10 Manager への更新（`--update-health-check` とロールバック）、WinForms の見た目（DPI・フォント）。CIの成果物（net10の候補バンドル）はまだ家PCで起動していない。
+
+## 5. Release前の条件（案）
+1. 本ブランチをmainに入れる前に、`release` ワークフローが .NET 10 を前提にする点を承認（.NET 8 版のRelease手順は、`main` に入れた時点でなくなる）。
+2. 候補バンドルを取得し、`Test-PcAgentRelease.ps1 -MinimumNodeVersion … -MinimumDotNetRuntime …` と `Compare-BundleToSource.ps1` を実行。
+3. 家PCへの更新は本人が実行し、`--update-health-check` の通過（失敗時は自動ロールバック）、その後に Game Safety・緊急停止・ローカル承認の動作を確認。
+4. 先に .NET 8 のまま 8.0.32 に更新するなら、`global.json`／`RuntimeFrameworkVersion` で固定する案（.NET 8 は 2026-11-10 までのため、短期の保険）。
