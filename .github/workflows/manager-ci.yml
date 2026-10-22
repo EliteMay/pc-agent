@@ -10,12 +10,14 @@ on:
       - 'agent/**'
       - '.github/workflows/manager-ci.yml'
       - '.node-version'
+      - '.dotnet-runtime-version'
   pull_request:
     paths:
       - 'manager/**'
       - 'agent/**'
       - '.github/workflows/manager-ci.yml'
       - '.node-version'
+      - '.dotnet-runtime-version'
 
 permissions:
   contents: read
@@ -28,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - uses: actions/setup-node@v4
         with:
           node-version-file: '.node-version'
@@ -78,7 +80,7 @@ jobs:
 
       - name: Verify release candidate packaging and SHA-256
         shell: pwsh
-        run: ./scripts/Test-PcAgentRelease.ps1 -BundleRoot dist/pc-agent-manager-win-x64 -MinimumNodeVersion (Get-Content .node-version -Raw).Trim()
+        run: ./scripts/Test-PcAgentRelease.ps1 -BundleRoot dist/pc-agent-manager-win-x64 -MinimumNodeVersion (Get-Content .node-version -Raw).Trim() -MinimumDotNetRuntime (Get-Content .dotnet-runtime-version -Raw).Trim()
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
