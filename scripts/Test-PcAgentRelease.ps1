@@ -15,7 +15,8 @@ param(
     [string]$BundleRoot,
     [switch]$RequireLoginStartup,
     [switch]$RequireGameSafety,
-    [string]$MinimumNodeVersion = ''
+    [string]$MinimumNodeVersion = '',
+    [string]$MinimumDotNetRuntime = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,6 +90,20 @@ try {
             }
             Assert-Readiness $floorOk "Bundled Node is at least v$MinimumNodeVersion (found $nodeVersion)"
         }
+    }
+
+    if ($MinimumDotNetRuntime -and (Test-Path -LiteralPath $exe -PathType Leaf)) {
+        # The self-contained Manager embeds its runtimeconfig; read the bundled .NET runtime version
+        # from it (no execution) and require at least the pinned security release.
+        $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($exe))
+        $m = [regex]::Match($text, '"name":\s*"Microsoft\.NETCore\.App",\s*"version":\s*"(\d+\.\d+\.\d+)"')
+        $runtimeOk = $false
+        $found = 'not found'
+        if ($m.Success -and $MinimumDotNetRuntime -match '^\d+\.\d+\.\d+$') {
+            $found = $m.Groups[1].Value
+            $runtimeOk = ([version]$found) -ge ([version]$MinimumDotNetRuntime)
+        }
+        Assert-Readiness $runtimeOk "Bundled .NET runtime is at least $MinimumDotNetRuntime (found $found)"
     }
 
     if (Test-Path -LiteralPath $exe -PathType Leaf) {
