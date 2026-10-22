@@ -66,3 +66,13 @@ test("rejects missing tool_version", () => {
     /tool_version/i
   );
 });
+
+test("rejects non-ISO or ambiguous command timestamps", () => {
+  for (const value of ["2026-10-07", "Oct 7, 2026 04:00", "Wed, 07 Oct 2026 04:00:00 GMT", "2026-10-07T04:00:00"]) {
+    assert.throws(
+      () => validateCommandEnvelope(validCommand({ created_at: value }), { now }),
+      /created_at|ISO timestamp/i,
+      value
+    );
+  }
+});

@@ -2,6 +2,7 @@ const PROTOCOL_VERSION = 1;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const TOOL_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const TOOL_VERSION_PATTERN = /^[0-9]+(?:\.[0-9]+){0,2}$/;
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 export class CommandEnvelopeError extends Error {
   constructor(message, code) {
@@ -23,7 +24,7 @@ function requireId(value, fieldName) {
 }
 
 function parseTimestamp(value, fieldName) {
-  if (typeof value !== "string") {
+  if (typeof value !== "string" || !ISO_TIMESTAMP_PATTERN.test(value)) {
     throw new CommandEnvelopeError(
       `${fieldName} must be an ISO timestamp.`,
       `INVALID_${fieldName.toUpperCase()}`
