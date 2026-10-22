@@ -43,6 +43,9 @@ function normalizeEndpoint(value) {
   if (parsed.protocol !== "https:") {
     throw new TypeError("endpointUrl must use HTTPS.");
   }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new TypeError("endpointUrl must not contain credentials, query parameters, or fragments.");
+  }
 
   return parsed.toString().replace(/\/$/, "");
 }
