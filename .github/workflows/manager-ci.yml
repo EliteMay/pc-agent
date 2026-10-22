@@ -9,11 +9,13 @@ on:
       - 'manager/**'
       - 'agent/**'
       - '.github/workflows/manager-ci.yml'
+      - '.node-version'
   pull_request:
     paths:
       - 'manager/**'
       - 'agent/**'
       - '.github/workflows/manager-ci.yml'
+      - '.node-version'
 
 permissions:
   contents: read
@@ -29,7 +31,7 @@ jobs:
           dotnet-version: '8.0.x'
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
 
       - name: Node tests
         working-directory: agent
@@ -76,7 +78,7 @@ jobs:
 
       - name: Verify release candidate packaging and SHA-256
         shell: pwsh
-        run: ./scripts/Test-PcAgentRelease.ps1 -BundleRoot dist/pc-agent-manager-win-x64
+        run: ./scripts/Test-PcAgentRelease.ps1 -BundleRoot dist/pc-agent-manager-win-x64 -MinimumNodeVersion (Get-Content .node-version -Raw).Trim()
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v4

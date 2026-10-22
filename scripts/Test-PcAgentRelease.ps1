@@ -14,7 +14,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BundleRoot,
     [switch]$RequireLoginStartup,
-    [switch]$RequireGameSafety
+    [switch]$RequireGameSafety,
+    [string]$MinimumNodeVersion = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,6 +80,15 @@ try {
         $nodeWorks = ($LASTEXITCODE -eq 0 -and
             $nodeVersion -match '^v\d+\.\d+\.\d+$')
         Assert-Readiness $nodeWorks 'Bundled Node executes'
+        if ($MinimumNodeVersion) {
+            # A floor, not an exact match: releases must not ship a bundled runtime older than the
+            # version pinned in .node-version (security releases). Unset keeps old bundles checkable.
+            $floorOk = $false
+            if ($nodeWorks -and $MinimumNodeVersion -match '^\d+\.\d+\.\d+$') {
+                $floorOk = ([version]$nodeVersion.TrimStart('v')) -ge ([version]$MinimumNodeVersion)
+            }
+            Assert-Readiness $floorOk "Bundled Node is at least v$MinimumNodeVersion (found $nodeVersion)"
+        }
     }
 
     if (Test-Path -LiteralPath $exe -PathType Leaf) {

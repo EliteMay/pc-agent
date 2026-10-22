@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
 
       - name: Verify tag matches bundle versions
         shell: pwsh
@@ -85,7 +85,7 @@ jobs:
 
       - name: Verify release candidate packaging and SHA-256
         shell: pwsh
-        run: ./scripts/Test-PcAgentRelease.ps1 -BundleRoot dist/pc-agent-manager-win-x64
+        run: ./scripts/Test-PcAgentRelease.ps1 -BundleRoot dist/pc-agent-manager-win-x64 -MinimumNodeVersion (Get-Content .node-version -Raw).Trim()
 
       - name: Build release archive and checksum
         shell: pwsh
