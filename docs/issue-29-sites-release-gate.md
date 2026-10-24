@@ -377,3 +377,25 @@ Updated `gateway/cloudflare-callback-relay/tests/sites-client.test.mjs` to POST 
 **残りの本当の実装と運用ゲート:** 保存版10の正式なサーバーソースreadbackで実PKCE token交換処理とGET表示専用／POST consume+claimを確認した上で、参照`createSitesRelayClient({mode:'live', liveEnabled:true, exchangeOAuthCode})`を既存Hosted入口へ統合する必要がある。Worker固定`/oauth/callback`がSupabase登録・認可開始・Site pending・token交換のredirect URIとして一致することが必要（現在の登録はSite callbackでありそのままでは一致しない）。Cloudflareの現配信コード/設定・本人所有権・callbackログ残留リスク・Gateway PR #47・旧Plugin権限・復元可能性と別途本人承認が確定するまで実OAuth/Relay有効化・Supabase OAuth登録変更・本番Deployは禁止。
 
 **判定:** **GO for source-only development validation**, **NO-GO for production deployment, actual OAuth issuance, and PC commands**。Issue #29の4条件は未達。
+
+## 2026-10-25 実DBで確定したOAuth redirect不一致（**NO-GO**、読み取り専用）
+
+**確認方法:** Supabase `auth.oauth_clients` と `auth.oauth_consents` で、client ID・client secret・ユーザーID・アクセストークン・生redirect listを表示しない**集計SELECTのみ**を実行。Cloudflare/Sites/Gateway/DBの書き換えやOAuth開始はしない。
+
+| auth.oauth_clients分類 | 登録数 | 登録済みredirectの分類 | 同意記録 |
+|---|---:|---|---:|
+| confidential | 1 | Site既存`https://kaito-pc-agent-web-bridge.kaito2526.chatgpt.site/oauth/callback`が1件、一方で**Workerのcallback一致0件** | **0** |
+| public | 2 | localhost/loopback 2件、Workerのcallback一致0件 | **2** |
+
+**重大な事実:** 未公開PR #42の`src/worker.mjs`は、実OAuth codeを `https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev/oauth/callback` で受け取り、`src/sites-client.mjs`は同じ `redirect_uri` でconfidential client + PKCEコード交換する構成。現在のSupabase confidential登録にはこの**完全一致URIが存在しない**。従って、今の設定のまま `RELAY_MODE=live` やSite `liveEnabled=true` を有効化しても、**このRelay経由の実OAuthは正常完走できない**。
+
+Supabaseの公式ドキュメント「[Getting Started with OAuth 2.1 Server](https://supabase.com/docs/guides/auth/oauth-server/getting-started)」は、OAuth clientのredirect URIは**wildcard不可・完全URL一致のみ**と明記し、複数URIの登録をサポート。Site内の通常Sign-in redirect URL設定とは**異なる**ため混同しない。
+
+### この不一致の安全な解消案（現時点では**実行禁止**）
+
+1. まず正式なSites version 10のsource readbackで、現行のconfidential client IDと実Site server側のClient IDを**非公開の等値照合**。Site auth session、本人/Cookie/Origin/CSRF、PKCE発行/交換、`GET /connect/complete`表示のみの実装を確認。`auth.oauth_clients`に1件あるSite callback URLだけではClient ID同一性の証明にならない。
+2. 既存のSite callbackを**削除・置換しない**。本人がSupabase OAuth登録変更を明示承認した場合にだけ、同じ既存confidential clientの登録redirect URIへ正確な`https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev/oauth/callback`を**追加**する。新しいサービスや不要なOAuthクライアントを増やさない。登録API/公式Dashboardで登録完了をreadbackし、現Site callbackとWorker callback両方の完全一致を**機密値なしの集計で検証**。
+3. その後にauthorize request、Sites pending.redirectUri、Worker固定callback、`exchangeOAuthCode`のtoken exchange `redirect_uri`を同じWorker URIへ統一した**未公開**実装を検査。confidential secret/PKCEは既存serverのみ。Workerへsecret/access/refresh tokenは送らない。
+4. さらにPR #47のGateway client_id権限・旧Plugin互換性、Cloudflare現稼働Artifact、Sites保存版10との結線、ロールバック、本人個別Deploy承認を確認してから、最初はPCコマンド無しのauth/relay診断のみ実測する。
+
+**現状:** **BLOCK DEPLOY / BLOCK LIVE OAUTH / PC COMMAND未実施**。既存の本人による残留ログリスク許容は維持するが、それはredirect登録・実OAuth開始・本番変更の承認ではない。PR #42/#47はDraft。ダミーのCI成功・ソース追加は実OAuth成功の証拠ではない。
