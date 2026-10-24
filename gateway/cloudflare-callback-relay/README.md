@@ -137,7 +137,7 @@ node tools/verify-log-settings.mjs < private-effective-settings.json
 
 ### 現在実装したサーバー側の経路
 
-- Cloudflare Workerの既定 `RELAY_MODE=dummy` は維持。実OAuth受理にはServer-side config **`RELAY_MODE=live` と `RELAY_LIVE_ENABLED=true`（文字列）両方**が必要。片方だけ・未知の設定・署名鍵/暗号鍵/D1欠落は503 `setup_required`。この2値は運用承認を代行しない。
+- Cloudflare Workerの既定 `RELAY_MODE=dummy` は維持。実OAuth受理にはServer-side config **`RELAY_MODE=live` と `RELAY_LIVE_ENABLED=true`（文字列）両方**が必要。片方だけ・未知の設定・署名鍵/暗号鍵/D1欠落は503 `setup_required`。**実OAuth時はさらに `RELAY_ORIGIN` が既存の `https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev` と一致する必要があり、テスト専用 `relay.example.invalid` はWorker・Sites側の両方で拒否する。** オフライン検証はその本番URL識別子を使ったモックで行い、ネットワーク接続しない。この2値は運用承認を代行しない。
 - Workerの`/prepare`→`GET /oauth/callback`→`/claim`は既存のHMAC署名・Origin固定・D1暗号化・期限300秒・rate制限・一回限りclaim・queryなし303を再利用する。実モードは`oauthCode`でのみ認可コードを受け入れ、ダミーコードを拒否。認可拒否は従来の有限な`denied`結果に正規化する。
 - **DB schema変更なし**で、実モードの`state_hash`を`SHA256("kaito-relay|live|"+state)`へ名前空間分離。暗号化AADにもmodeを束縛する。既存dummy行は以前と同じHash/AADのまま。モード変更前のpendingが別モードのcallback/claimへ渡ることを防ぐ。
 - Sites参照`createSitesRelayClient`は既定`mode='dummy'`、実モードは`mode='live', liveEnabled=true, exchangeOAuthCode`（server-only callback）の明示設定を要求。GET完了は禁止、同一Origin+CSRF付きPOSTのみpendingを一回消費する。Workerとprepare responseのmode不一致や戻り値schema異常は503で停止する。callbackは**生のaccess/refresh tokenをブラウザへ出さない**。
