@@ -1,5 +1,7 @@
 # Work向け: Sites保存版8のGET/POST確認（読み取りのみ・最小）
 
+> **2026-10-25更新（この文書は当時の調査依頼として保存）:** GitHub PR #42の`src/sites-client.mjs`については `complete()` をPOST限定、Origin必須、保留状態の消費前にCSRF一致を要求するよう修正済み。GETのまま使うと405で拒否され、pendingは消費しない（模擬テストで確認）。この文書中の「GitHub基準コードがGETで状態変更」は**当時の旧コードについての説明**であり現在のブランチには当てはまらない。保存版10のSites実装・Hosted配信物との同一性、ブラウザのGET表示動線は**未検証**。PR #42は未マージ・未Deploy。
+
 **目的:** GitHubの基準コード `gateway/cloudflare-callback-relay/src/sites-client.mjs`（`complete` が **GET** で状態変更）と、Site側の実装（Work報告では「GETは表示のみ、POSTで消費」）の食い違いが、保存版8で解消されているかを確認する。**保存版8は未公開。コード変更・保存・Deploy・Secret・Worker通信・Hosted DB書込みはしない。** 秘密値・Cookie・state/code/verifier/token・Owner情報は回答に含めない。
 
 ## 対象
