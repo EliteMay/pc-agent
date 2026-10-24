@@ -1,5 +1,5 @@
 import { RelayError, RETURN_URL, ISSUER, OAUTH_ERRORS, opaque, dummyCode, oauthCode, plainObject, keyBytes,
-  relayOrigin, authenticatedBody, modeStateHash, seal, open, safeHeaders, safeJson, safeError } from './protocol.mjs';
+  relayOrigin, RELAY_PRODUCTION_ORIGIN, authenticatedBody, modeStateHash, seal, open, safeHeaders, safeJson, safeError } from './protocol.mjs';
 import { createStore } from './store.mjs';
 
 function configuration(env) {
@@ -11,7 +11,10 @@ function configuration(env) {
     !env.DB?.prepare||!env.DB?.batch) throw new RelayError('setup_required');
   keyBytes(env.RELAY_SIGNING_KEY); keyBytes(env.RELAY_STORAGE_KEY);
   if(env.RELAY_SIGNING_KEY===env.RELAY_STORAGE_KEY) throw new RelayError('setup_required');
-  return {origin:relayOrigin(env.RELAY_ORIGIN),store:createStore(env.DB),mode};
+  const origin=relayOrigin(env.RELAY_ORIGIN);
+  // Real OAuth codes must never be handled by the offline-test relay host.
+  if(mode==='live'&&origin!==RELAY_PRODUCTION_ORIGIN) throw new RelayError('setup_required');
+  return {origin,store:createStore(env.DB),mode};
 }
 function callbackPayload(url,mode) {
   if(url.href.length>4096) throw new RelayError('invalid_input');
