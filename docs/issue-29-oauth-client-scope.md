@@ -68,3 +68,20 @@ An additional read-only query against `auth.oauth_clients` tested only aggregate
 This narrows the likely Sites OAuth registration to one record, **but is not proof that deployed Sites saved-v10 actually uses its `client_id`**. This chat's available management tools expose only the connected Site plugin wrapper and a fixed probe, not the hosted Site source or secure configuration readback. Comparing the Site's actual OAuth client setting to the registration must take place via its formal Site management interface. Avoid posting raw client IDs into public GitHub logs/issues.
 
 Release decision unchanged: **Draft only, no deploy, no OAuth/Relay activation, no PC actions**.
+
+## 2026-10-24 OAuth consent compatibility evidence and Site access boundary
+
+Read-only `auth.oauth_clients` / `auth.oauth_consents` aggregates, with **no raw client IDs, consent user IDs or credentials output**:
+
+| Client group | Registered clients | Recorded consent rows |
+| --- | ---: | ---: |
+| Confidential, exact Sites callback hostname match | 1 | 0 |
+| Public, no Sites callback match | 2 | 2 |
+
+**Interpretation:** Zero consent records for the candidate do not prove no token was ever issued, and existing public-client consent records do not prove current sessions or tokens are valid. However they provide a concrete **legacy compatibility regression risk**: deploying fail-closed PR #47 with only the Site client configured could cut off authorized previous Plugin workflows. Do not infer consent->plugin mapping without authoritative client configuration.
+
+Connected private Plugin Creator metadata confirmed the Sites bridge plugin is only a fixed diagnostic wrapper; its manifest contains no OAuth client ID. The owned legacy Private Plugin's `mcp.json`/.mcp.json connect directly to Supabase, but also do not identify the OAuth client registration with sufficient certainty. The available browser tab reader refused access under host security policy; that restriction must **not** be bypassed or replaced with CDP/raw navigation. The Library's Site artifact metadata currently reports `source_version_number=10` but does not expose hosted Site source or server-side secrets/settings.
+
+**Action once formal Sites management is available:** compare the actual OAuth client ID in the saved-v10 server-only configuration against the one and only Supabase confidential client with the exact Sites callback host. Perform the comparison privately in that management session and publish only `match/mismatch/missing`, without copying IDs or tokens into GitHub or chat. If no formal readback exists, leave `unverified` rather than inferring a match.
+
+For each legacy client, separately assess current consent/registration and the minimal capabilities required before configuring `KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS`. Do not automatically grant both public clients full access.
