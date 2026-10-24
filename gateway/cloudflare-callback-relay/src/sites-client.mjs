@@ -7,10 +7,12 @@ function checkRoute(request,action) {
   const u=new URL(request.url),path=action==='prepare'?'/oauth/start':'/connect/complete';
   if(u.origin!==SITE_ORIGIN) throw new RelayError('origin_rejected');
   if(u.pathname!==path) throw new RelayError('not_found');
-  if(request.method!==(action==='prepare'?'POST':'GET')) throw new RelayError('method_not_allowed');
+  // OAuth state consumption is never allowed on GET. Both actions require POST.
+  if(request.method!=='POST') throw new RelayError('method_not_allowed');
   if(u.search||u.hash) throw new RelayError('invalid_input');
   const origin=request.headers.get('origin');
-  if((action==='prepare'||origin!==null)&&origin!==SITE_ORIGIN) throw new RelayError('origin_rejected');
+  // Reject missing Origin as well as cross-origin requests for both POST routes.
+  if(origin!==SITE_ORIGIN) throw new RelayError('origin_rejected');
 }
 function checkPending(pending,owner,origin,now) {
   if(!plainObject(pending)||pending.owner!==owner||!opaque(pending.browserId)||!opaque(pending.state)||!opaque(pending.verifier)||
@@ -64,7 +66,9 @@ export function createSitesRelayClient({origin,key,authorize,loadPending,consume
       let pending,consumed=false;
       try {
         const loaded=await pendingFor(request,'complete');pending=loaded.pending;
-        // Atomic Site consumption precedes claim/exchange, just as in saved2.
+        // A matching CSRF token is mandatory before any atomic state consumption.
+        if(!opaque(pending.csrf)||request.headers.get('x-oauth-csrf')!==pending.csrf) throw new RelayError('authentication_required');
+        // Atomic Site consumption precedes claim/exchange after POST + CSRF verification.
         if(await consumePending(pending)!==true) throw new RelayError('state_unavailable');consumed=true;
         const result=checkClaim(await rpc('/claim',{state:pending.state,binding:loaded.binding},200),pending.state);
         if(result.outcome==='denied') {
