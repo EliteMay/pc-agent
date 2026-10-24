@@ -1,11 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createHmac, createHash, randomBytes } from 'node:crypto';
+import { RELAY_PRODUCTION_ORIGIN } from '../src/protocol.mjs';
 
 // Public, deliberately non-production test keys; never used in hosted settings.
 export const KEY = Buffer.alloc(32, 7).toString('base64url');
 export const STORAGE_KEY = Buffer.alloc(32, 9).toString('base64url');
 export const ORIGIN = 'https://relay.example.invalid';
+// Production host identifier for in-memory mocks only. No real network requests.
+export const LIVE_ORIGIN = RELAY_PRODUCTION_ORIGIN;
 export const SITE = 'https://kaito-pc-agent-web-bridge.kaito2526.chatgpt.site';
 export const ISSUER = 'https://vtnwbgejlaqpnwmlzbjy.supabase.co/auth/v1';
 export const epoch = 1800000000000;
@@ -63,9 +66,9 @@ export async function fixture(options = {}) {
   const env = { DB, RELAY_MODE: 'dummy', RELAY_ORIGIN: ORIGIN, RELAY_SIGNING_KEY: KEY, RELAY_STORAGE_KEY: STORAGE_KEY, ...options.env };
   const worker = createWorker({ clock: () => now });
   const state = value(), binding = digest('owner-browser-session');
-  const request = (path, body, opts) => signed(path, body, { now, ...opts });
+  const request = (path, body, opts) => signed(path, body, { now, origin:env.RELAY_ORIGIN, ...opts });
   const prepare = async (s = state, b = binding) => worker.fetch(request('/prepare', { state: s, binding: b }), env);
-  const callback = (query = `code=dummy-code-canary&state=${state}`) => worker.fetch(new Request(`${ORIGIN}/oauth/callback?${query}`), env);
+  const callback = (query = `code=dummy-code-canary&state=${state}`) => worker.fetch(new Request(`${env.RELAY_ORIGIN}/oauth/callback?${query}`), env);
   const claim = (opts = {}) => worker.fetch(request('/claim', { state, binding, ...opts.body }, opts), env);
   return { DB, env, worker, state, binding, prepare, callback, claim, request, advance: ms => { now += ms; }, clock: () => now };
 }
