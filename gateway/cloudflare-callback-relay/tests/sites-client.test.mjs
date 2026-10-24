@@ -6,7 +6,7 @@ import { RelayError } from '../src/protocol.mjs';
 
 async function setup(options={}) {
   const { createSitesRelayClient }=await import('../src/sites-client.mjs');
-  const f=await fixture(); const db=new DatabaseSync(':memory:');
+  const f=await fixture({ env: options.env ?? {} }); const db=new DatabaseSync(':memory:');
   db.exec('CREATE TABLE local_pending(state TEXT PRIMARY KEY,owner TEXT,browser TEXT,verifier TEXT,expires_at INTEGER,csrf TEXT)');
   const owner='dummy-site-owner',browser=value(),verifier=value(),csrf=value();
   db.prepare('INSERT INTO local_pending VALUES(?,?,?,?,?,?)').run(f.state,owner,browser,verifier,epoch+300000,csrf);
@@ -23,6 +23,8 @@ async function setup(options={}) {
     consumePending:async pending=>db.prepare('DELETE FROM local_pending WHERE state=? AND owner=? AND browser=? AND expires_at>? RETURNING state').get(pending.state,owner,browser,f.clock())!==undefined,
     invalidatePending:async()=>{invalidated++;db.exec('DELETE FROM local_pending');},
     exchangeDummy:async input=>{exchanges.push(input);if(options.exchangeError) throw new Error('dummy-private-token');return {dummy:true};},
+    exchangeOAuthCode:async input=>{exchanges.push(input);if(options.exchangeError) throw new Error('live-private-token');return {access_token:'never-display'};},
+    mode:options.mode??'dummy',liveEnabled:options.liveEnabled??false,
     fetcher:async request=>{calls.push({url:request.url,method:request.method,redirect:request.redirect,credentials:request.credentials,headers:Object.fromEntries(request.headers),body:await request.clone().text()});
       if(options.fetcher) return options.fetcher(request,f);
       return f.worker.fetch(request,f.env);
