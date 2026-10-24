@@ -107,3 +107,24 @@ Four assertions cover an approved Sites OAuth client returning `pong` from the A
 **Read-only live inventory only:** the paired PC Agent's heartbeat to Supabase was fresh at the time of inspection; historical `kaito_pc_commands` aggregates showed 8 completed `ping` and 2 completed `notepad_gui` records in the previous 30 days (latest on 2026-10-08). These historical records are not attributable to a successful *current* ChatGPT Sites integration and should not close Issue #29.
 
 Release gate unchanged: confirm exact OAuth client ownership and legacy compatibility, keep Sites/Relay OAuth OFF, do not deploy this draft or send a PC command without separate authorization.
+
+## 2026-10-24 pre-rollout endpoint isolation check (read-only)
+
+Using read-only queries with **no client IDs, URL values, secrets or JWTs returned**, we classified the three OAuth registrations more precisely:
+
+- 2 **public** registrations from 2026-10-06: generic/non-PC registration names and **loopback** callback addresses. These have a combined 2 consent records. Their actual relation to retired Plugin releases remains unproven.
+- 1 **confidential** registration from 2026-10-09: PC Agent-related registration name and the precise Site callback **hostname with an HTTPS URL boundary** (not merely a substring match). It has 0 consent records; this is still only a *candidate* for the masked Hosted Secret ID.
+- No Cloudflare `workers.dev` callback registrations were present during the audit.
+
+### Important global authorization invariant
+
+The current production OAuth Gateway v15 checks the signed user's allowed UUID, **but does not distinguish OAuth client IDs**. A separate minimal Site-specific MCP endpoint **alone** would not enforce least privilege: a bearer token issued to that Site might also authenticate to the unchanged older full-capability Gateway endpoint, causing a cross-endpoint privilege bypass.
+
+Accordingly, **all reachable Gateway endpoints accepting Site bearer tokens must enforce client-specific authorization** before any command is queued. PR #47 scopes the existing full Gateway rather than adding a parallel API. Merely hiding tools in the Site's UI or adding a new read-only endpoint without protecting the legacy one is not an acceptable workaround.
+
+### Remaining real-world blockers, not solved by offline tests
+
+1. Formal Site management masks the client ID Secret. Registration host/name classification is strong circumstantial attribution, **not proof of identical client IDs**. Do not log, reveal or guess the Site Secret.
+2. Explicit legacy compatibility decision: the two generic loopback clients must **not** be bulk-listed as privileged. Without proof of necessity, the safe PR #47 default is zero privileged clients, but this would intentionally deny previously authorized legacy clients after deployment. Approval of that compatibility tradeoff is required.
+3. The callback/log protection gate (PR #42) and separately approved OAuth enablement must be satisfied before any live token is issued. No redirect/Secret/DB/PC mutations were made in this analysis.
+4. For the eventual protected real-world test, independently check Site client `tools/list`, a harmless `gateway_probe`, a no-side-effect denial of disallowed `tools/call`, then `relay_ping`; **only after authorization and an explicit PC-action approval** may the actual `ping` command be queued.
