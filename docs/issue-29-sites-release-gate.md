@@ -351,3 +351,16 @@ Updated `gateway/cloudflare-callback-relay/tests/sites-client.test.mjs` to POST 
 - 既存GitHub `sites-client.mjs`は2026-10-25修正済みでPOST専用。反映済みSiteを推測せず、**このGitHubコードをSitesへそのままコピペ・自動Deployしない**。
 
 **現時点の判定:** リスク受容の再審議や追加Cloudflareサービス導入は不要。ただしSite実ソース照合とクライアントID同一性が未証明のため **BLOCK DEPLOY / OAuth OFF** を維持する。必要な実環境変更は本人による対象別の明示承認後だけ。
+
+## 2026-10-25: 実OAuthは設定だけでは起動できない（source構造の確認）
+
+最新PR #42の`gateway/cloudflare-callback-relay/src/worker.mjs`、`src/protocol.mjs`、`src/sites-client.mjs`を再確認した結果:
+
+1. Workerの`configuration()`は`RELAY_MODE !== 'dummy'`を`setup_required`として拒否する。現在の`callbackPayload()`とclaim検証は`dummyCode`しか認めない。
+2. `protocol.mjs`に将来のための`oauthCode`正規表現は存在するが、Workerの本処理では使われていない。
+3. Sites参照Adapterは`exchangeDummy`のみ呼び、`mode:'dummy'`以外のprepare応答と、非ダミーcodeのclaim結果を拒否する。
+4. したがって**Cloudflareの環境変数だけをliveへ切り替えることは解決策にならない**。実OAuthのコードを受け入れて安全に渡すlive処理と、Site側のPKCE交換までを互換設計・実装・検証する必要がある。
+
+**安全な実装順:** 保存版10の本人認証済み正式source readbackで、GET表示とPOST消費、PKCE/verifier、redirect_uri、token交換ハンドラを行単位で確認する。その実コードに合わせ、既存Workerとadapterへ`dummy`の既存動作を壊さない明示的な`live`モードを**ソース上だけ**追加し、ライブモードがデフォルトOFF/SecretなしOFF/未登録callback OFFでfail-closedになるテストを用意する。認可コードはログ・Issue・テスト出力に出さず、署名・本人/ブラウザbinding・一回限りclaim・TTL・固定Origin/redirect・POST+CSRFを維持する。Site OAuth Client ID/legacy互換性、正式callback登録、PKCEとconfidentialの実条件、復旧ゲート、本人の個別変更承認が満たされるまで**デプロイも実認可コード発行もしない**。
+
+この段落は実装条件の更新であり、上記live処理を完成したと主張するものではない。既存dummy-onlyデプロイと未公開PR #42は維持する。
