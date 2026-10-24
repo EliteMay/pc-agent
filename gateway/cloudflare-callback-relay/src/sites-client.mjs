@@ -1,6 +1,6 @@
 // SERVER ONLY. Call from the existing Sites handler after trusted dispatch
 // identity resolution. Do not expose this module, its keys or claim body to UI/MCP.
-import { RelayError, SITE_ORIGIN, TTL, opaque, dummyCode, plainObject, relayOrigin,
+import { RelayError, SITE_ORIGIN, TTL, opaque, dummyCode, oauthCode, plainObject, relayOrigin,
   keyBytes, sha, signedRequest, readText, safeJson, safeError } from './protocol.mjs';
 
 function checkRoute(request,action) {
@@ -19,16 +19,20 @@ function checkPending(pending,owner,origin,now) {
     !Number.isSafeInteger(pending.expiresAt)||pending.expiresAt<=now||pending.expiresAt>now+TTL||pending.redirectUri!==origin+'/oauth/callback') throw new RelayError('state_unavailable');
   return pending;
 }
-function checkClaim(value,state) {
+function checkClaim(value,state,mode) {
   if(!plainObject(value)||value.state!==state||!['code','denied'].includes(value.outcome)||
     Object.keys(value).sort().join(',')!==(value.outcome==='code'?'code,outcome,state':'outcome,state')||
-    value.outcome==='code'&&!dummyCode(value.code)) throw new RelayError('unavailable');
+    value.outcome==='code'&&!(mode==='dummy'?dummyCode(value.code):oauthCode(value.code)&&!dummyCode(value.code))) throw new RelayError('unavailable');
   return value;
 }
 export function createSitesRelayClient({origin,key,authorize,loadPending,consumePending,invalidatePending,
-  exchangeDummy,fetcher=fetch,clock=Date.now,timeoutMs=10000}) {
+  exchangeDummy,exchangeOAuthCode,mode='dummy',liveEnabled=false,fetcher=fetch,clock=Date.now,timeoutMs=10000}) {
   origin=relayOrigin(origin);keyBytes(key);
-  if([authorize,loadPending,consumePending,invalidatePending,exchangeDummy,fetcher].some(fn=>typeof fn!=='function')||
+  // The Site's trusted server must opt in explicitly. Neither browser args
+  // nor MCP tool input can select this mode.
+  if(!['dummy','live'].includes(mode)||(mode==='live'&&liveEnabled!==true)) throw new RelayError('setup_required');
+  const exchange=mode==='dummy'?exchangeDummy:exchangeOAuthCode;
+  if([authorize,loadPending,consumePending,invalidatePending,exchange,fetcher].some(fn=>typeof fn!=='function')||
     !Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>10000) throw new RelayError('setup_required');
   async function rpc(path,body,status) {
     const request=await signedRequest({origin,key,path,body,now:clock()});
@@ -58,8 +62,8 @@ export function createSitesRelayClient({origin,key,authorize,loadPending,consume
         const {pending,binding}=await pendingFor(request,'prepare');
         if(!opaque(pending.csrf)||request.headers.get('x-oauth-csrf')!==pending.csrf) throw new RelayError('authentication_required');
         const result=await rpc('/prepare',{state:pending.state,binding},201);
-        if(!plainObject(result)||Object.keys(result).sort().join(',')!=='mode,prepared'||result.prepared!==true||result.mode!=='dummy') throw new RelayError('unavailable');
-        return safeJson({prepared:true,mode:'dummy'},201);
+        if(!plainObject(result)||Object.keys(result).sort().join(',')!=='mode,prepared'||result.prepared!==true||result.mode!==mode) throw new RelayError('unavailable');
+        return safeJson({prepared:true,mode},201);
       } catch(error) { return safeError(error); }
     },
     async complete(request) {
@@ -70,13 +74,15 @@ export function createSitesRelayClient({origin,key,authorize,loadPending,consume
         if(!opaque(pending.csrf)||request.headers.get('x-oauth-csrf')!==pending.csrf) throw new RelayError('authentication_required');
         // Atomic Site consumption precedes claim/exchange after POST + CSRF verification.
         if(await consumePending(pending)!==true) throw new RelayError('state_unavailable');consumed=true;
-        const result=checkClaim(await rpc('/claim',{state:pending.state,binding:loaded.binding},200),pending.state);
+        const result=checkClaim(await rpc('/claim',{state:pending.state,binding:loaded.binding},200),pending.state,mode);
         if(result.outcome==='denied') {
           await invalidatePending(pending);consumed=false;
-          return safeJson({state:'denied',mode:'dummy',gateway_authenticated:false});
+          return safeJson({state:'denied',mode,gateway_authenticated:false});
         }
-        await exchangeDummy({code:result.code,state:pending.state,code_verifier:pending.verifier,redirect_uri:pending.redirectUri});
-        return safeJson({state:'checking',mode:'dummy',gateway_authenticated:false});
+        // Actual token exchange is supplied by the Site's existing confidential
+        // OAuth client handler. Never forward the exchange result to the browser.
+        await exchange({code:result.code,state:pending.state,code_verifier:pending.verifier,redirect_uri:pending.redirectUri});
+        return safeJson({state:'checking',mode,gateway_authenticated:false});
       } catch(error) {
         if(consumed) { try { await invalidatePending(pending); } catch {} }
         return safeError(error);
