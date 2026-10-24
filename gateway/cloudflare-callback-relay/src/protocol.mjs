@@ -73,19 +73,21 @@ export async function authenticatedBody(request,origin,key,now) {
   if(!valid) throw new RelayError('authentication_required');
   return {body,nonceHash:await sha(nonce)};
 }
-export const aad = row => `kaito-relay|v1|dummy|${row.state_hash}|${row.binding}|${row.expires_at}`;
-export async function seal(payload,key,row) {
+// Separate live and dummy ciphertext domains without changing the existing D1 schema.
+export const modeStateHash = (mode, state) => sha(mode === 'live' ? 'kaito-relay|live|' + state : state);
+export const aad = (row, mode='dummy') => `kaito-relay|v1|${mode}|${row.state_hash}|${row.binding}|${row.expires_at}`;
+export async function seal(payload,key,row,mode='dummy') {
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const cryptoKey=await crypto.subtle.importKey('raw',keyBytes(key),'AES-GCM',false,['encrypt']);
-  const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:utf8.encode(aad(row))},cryptoKey,utf8.encode(JSON.stringify(payload)));
+  const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:utf8.encode(aad(row,mode))},cryptoKey,utf8.encode(JSON.stringify(payload)));
   return JSON.stringify({v:1,iv:base64(iv),ciphertext:base64(encrypted)});
 }
-export async function open(envelope,key,row) {
+export async function open(envelope,key,row,mode='dummy') {
   try { if(typeof envelope!=='string'||envelope.length>4096) throw 0;
     const data=JSON.parse(envelope); if(!plainObject(data)||Object.keys(data).sort().join(',')!=='ciphertext,iv,v'||data.v!==1) throw 0;
     const iv=bytes(data.iv); if(iv.length!==12) throw 0;
     const cryptoKey=await crypto.subtle.importKey('raw',keyBytes(key),'AES-GCM',false,['decrypt']);
-    const clear=await crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:utf8.encode(aad(row))},cryptoKey,bytes(data.ciphertext));
+    const clear=await crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:utf8.encode(aad(row,mode))},cryptoKey,bytes(data.ciphertext));
     return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(clear));
   } catch { throw new RelayError('unavailable'); }
 }
