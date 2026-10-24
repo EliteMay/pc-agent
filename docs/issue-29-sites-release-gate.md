@@ -338,3 +338,16 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 Updated `gateway/cloudflare-callback-relay/tests/sites-client.test.mjs` to POST for the legitimate flow and added direct tests proving GET non-mutation, pending preservation on invalid Origin/CSRF, and successful legitimate completion after rejection. Cloudflare dummy CI passed at [40106862549](https://github.com/EliteMay/pc-agent/actions/runs/40106862549) with tests, checks and artifact dry-run. **Source and offline mocks only**, not proof of Site saved version 10's runtime wiring, authenticated browser identity, live callback logging, or client-ID compatibility. No GitHub merge, Site/Worker deploy, OAuth/Relay enabling, Cloudflare/DB/Secrets or PC command changes.
 
 **Release gates still BLOCKED:** direct Site Source v10 vs adapter method wiring/readback, actual OAuth client ID equality, callback log protection, explicit legacy compatibility decision and a separately authorized production deployment all remain unresolved.
+
+## 2026-10-25: ログリスク許容と未証明・未承認の境界を再整理（本番変更なし）
+
+**既存の本人判断を再確認:** 本PRの `docs/issue-29-cloudflare-live-dummy-verification.md` は2026-10-15に、Cloudflare内部/edgeの非可視ログ・ブラウザ履歴・Sites POST bodyログの**残留リスクを、PKCE + confidential OAuth client + 単回コード + 約300秒の期限等の緩和込みで本人が許容した**と明記している。この既決判断を忘れて「全ログ層の非保存が完全証明されるまで設計作業すら停止」と誤読しないこと。
+
+**ただし、許容と実証・実行承認は別:**
+- 観測可能な設定は`observability`無効/`logpush`無効等の範囲であり、Cloudflare内部/CDNログ・ブラウザ履歴・Sites POST bodyの非保持は**今も未証明**。未証明部分を`verified`やゼロリスクとは表示しない。
+- 2026-10-15の許容判断は**実OAuthをONにする承認ではない**。confidential登録の実Site SecretとのID一致、正しいredirect URI、実PKCE、本人/Cookie/CSRF/Origin境界、Gateway client_id制限、旧Plugin互換性、Site保存版10のGET/POST実装整合、復旧手順が依然ゲート。
+- 今のPR #42 Workerコードはdummy-onlyで実OAuth codeを受け取らない。`live_oauth_allowed:false`を変更したり、現Workerへ実Codeを送らない。
+- 現チャットから正式Sites保存版10のサーバー側ソース取得機能は公開されていない。LibraryにはSite公開用説明文とバージョンメタデータのみ。これらをHostedコード一致確認の代用としない。本人認証済みSites管理の`get_site_version`相当の正式読取で、保存版10のGET表示専用ルートとPOST consume/claim、Origin/CSRF検証の有無をファイル・行単位で照合する必要がある。
+- 既存GitHub `sites-client.mjs`は2026-10-25修正済みでPOST専用。反映済みSiteを推測せず、**このGitHubコードをSitesへそのままコピペ・自動Deployしない**。
+
+**現時点の判定:** リスク受容の再審議や追加Cloudflareサービス導入は不要。ただしSite実ソース照合とクライアントID同一性が未証明のため **BLOCK DEPLOY / OAuth OFF** を維持する。必要な実環境変更は本人による対象別の明示承認後だけ。
