@@ -77,18 +77,18 @@ async function callTool(name, id, token) {
 
 async function main() {
   if (process.argv.length !== 3 || process.argv[2] !== "--live") {
-    process.stdout.write("NOT RUN: live mode requires --live and a separately approved OAuth rollout.\\n");
+    process.stdout.write("NOT RUN: live mode requires --live and a separately approved OAuth rollout.\n");
     return;
   }
   const token = process.env.PC_AGENT_OAUTH_ACCESS_TOKEN;
   if (typeof token !== "string" || token.length < 40 ||
-      /[\\s\\r\\n]/.test(token) || token.startsWith("Bearer ")) {
+      /[\\s\\r\n]/.test(token) || token.startsWith("Bearer ")) {
     fail("preflight", "missing_or_invalid_token_environment");
   }
 
   // GET and tools/list cannot enqueue a device operation.
   expectScopedCapabilities(await send({ method: "GET", token, stage: "get_status" }), "get_status");
-  process.stdout.write("PASS get_status: verified Site-scoped capabilities\\n");
+  process.stdout.write("PASS get_status: verified Site-scoped capabilities\n");
 
   const rpc = await send({
     method: "POST",
@@ -102,10 +102,10 @@ async function main() {
   if (!actual || JSON.stringify(actual) !== JSON.stringify([...toolNames].sort())) {
     fail("tools_list", "tool_scope_mismatch");
   }
-  process.stdout.write("PASS tools_list: exactly three bootstrap tools\\n");
+  process.stdout.write("PASS tools_list: exactly three bootstrap tools\n");
 
   expectScopedCapabilities(await callTool("gateway_probe", 102, token), "gateway_probe");
-  process.stdout.write("PASS gateway_probe: authenticated Site client\\n");
+  process.stdout.write("PASS gateway_probe: authenticated Site client\n");
 
   // relay_ping only reads paired-device metadata; no Windows command is queued.
   const relay = await callTool("relay_ping", 103, token);
@@ -113,14 +113,14 @@ async function main() {
       typeof relay.deviceRegistered !== "boolean") {
     fail("relay_ping", "unexpected_relay_result");
   }
-  process.stdout.write("PASS relay_ping: Gateway can read relay/device status\\n");
+  process.stdout.write("PASS relay_ping: Gateway can read relay/device status\n");
 
-  process.stdout.write("STOP: No PC ping, screenshot, GUI, task, or file action was sent.\\n");
+  process.stdout.write("STOP: No PC ping, screenshot, GUI, task, or file action was sent.\n");
 }
 
 main().catch(error => {
   // Report stage/code only. Never surface response bodies, tokens or headers.
   const safe = error instanceof Error ? error.message : "unknown_failure";
-  process.stderr.write(`FAIL ${/^[a-z_]+: [a-z0-9_]+$/.test(safe) ? safe : "connection_or_unexpected_error"}\\n`);
+  process.stderr.write(`FAIL ${/^[a-z_]+: [a-z0-9_]+$/.test(safe) ? safe : "connection_or_unexpected_error"}\n`);
   process.exitCode = 1;
 });
