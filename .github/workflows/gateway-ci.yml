@@ -8,10 +8,12 @@ on:
     paths:
       - 'gateway/**'
       - '.github/workflows/gateway-ci.yml'
+      - 'tests/oauth-*.mjs'
   pull_request:
     paths:
       - 'gateway/**'
       - '.github/workflows/gateway-ci.yml'
+      - 'tests/oauth-*.mjs'
 
 permissions:
   contents: read
@@ -22,6 +24,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test OAuth client scope and dispatch guards
+        run: node --test tests/oauth-client-policy.test.mjs tests/oauth-site-smoke-validation.test.mjs
+      - name: Verify safe OAuth live-smoke script (do not make network calls)
+        run: |
+          node --check tests/oauth-site-live-smoke.mjs
+          node tests/oauth-site-live-smoke.mjs
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
