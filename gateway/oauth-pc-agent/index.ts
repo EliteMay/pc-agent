@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { pipeline } from "npm:@supabase/middleware@^0.5.0";
 import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^1.6.0";
+import { isToolAllowed, resolveClientPolicy, visibleTools } from "./client-policy.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
@@ -1006,14 +1007,24 @@ const handler = async (req: Request, ctx: any) => {
     }, 403);
   }
 
+  // This policy uses verified JWT claims, not request headers or RPC arguments.
+  // Missing client ID or missing deployment configuration fails closed.
+  const clientPolicy = resolveClientPolicy(ctx?.jwtClaims, {
+    siteClientId: Deno.env.get("KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID"),
+    privilegedClientIds: Deno.env.get("KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS") ?? "",
+  });
+  if (clientPolicy === "deny") {
+    return json({ error: "forbidden", message: "This OAuth client is not authorized." }, 403);
+  }
+
   if (req.method === "GET") {
     return json({
       service: "pc-agent-oauth",
       version: VERSION,
       oauth: true,
-      readOnly: false,
-      safeWrite: true,
-      orchestration: true,
+      readOnly: clientPolicy === "site",
+      safeWrite: clientPolicy === "privileged",
+      orchestration: clientPolicy === "privileged",
       authenticated: true,
     });
   }
@@ -1061,7 +1072,7 @@ const handler = async (req: Request, ctx: any) => {
     return json({
       jsonrpc: "2.0",
       id: body.id ?? null,
-      result: { tools: TOOLS },
+      result: { tools: visibleTools(TOOLS, clientPolicy) },
     });
   }
 
@@ -1084,6 +1095,16 @@ const handler = async (req: Request, ctx: any) => {
   if (method === "tools/call") {
     const name = String(body?.params?.name ?? "");
     const args = body?.params?.arguments ?? {};
+
+    // Execute the gate before task orchestration, device queue or sensitive tools.
+    if (!isToolAllowed(clientPolicy, name)) {
+      return mcpResult(body.id, {
+        success: false,
+        errorCode: "tool_not_allowed",
+        message: "This OAuth client cannot call that PC tool.",
+        retryable: false,
+      }, true);
+    }
 
     if (name === "gateway_probe") {
       return mcpResult(body.id, {
