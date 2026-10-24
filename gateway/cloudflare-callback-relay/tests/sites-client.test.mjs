@@ -28,7 +28,7 @@ async function setup(options={}) {
       return f.worker.fetch(request,f.env);
     },
   });
-  const req=(complete=false,headers={},query='')=>new Request(SITE+(complete?'/connect/complete':'/oauth/start')+query,{method:complete?'GET':'POST',headers:{'x-test-owner':owner,cookie:browser,origin:SITE,'x-oauth-csrf':csrf,...headers}});
+  const req=(complete=false,headers={},query='')=>new Request(SITE+(complete?'/connect/complete':'/oauth/start')+query,{method:'POST',headers:{'x-test-owner':owner,cookie:browser,origin:SITE,'x-oauth-csrf':csrf,...headers}});
   const prepare=()=>client.prepare(req());
   const callback=()=>f.callback();
   return {f,db,client,calls,exchanges,owner,browser,verifier,csrf,req,prepare,callback,invalidated:()=>invalidated};
@@ -60,7 +60,45 @@ test('prepare retains explicit same-origin CSRF validation',async()=>{
 
 test('complete rejects query parameters and wrong HTTP methods before any transport',async()=>{
   const s=await setup();assert.equal((await s.client.complete(s.req(true,{},'?code=dummy-code-a&state=dummy'))).status,400);
-  assert.equal((await s.client.complete(new Request(SITE+'/connect/complete',{method:'POST'}))).status,405);assert.equal(s.calls.length,0);
+  assert.equal((await s.client.complete(new Request(SITE+'/connect/complete',{method:'GET'}))).status,405);assert.equal(s.calls.length,0);
+});
+
+
+test('GET completion is safe: no pending consumption, claim or exchange',async()=>{
+  const s=await setup();await s.prepare();await s.callback();
+  const get=new Request(SITE+'/connect/complete',{method:'GET',headers:{'x-test-owner':s.owner,cookie:s.browser,origin:SITE,'x-oauth-csrf':s.csrf}});
+  const r=await s.client.complete(get);
+  assert.equal(r.status,405);
+  assert.equal(s.calls.filter(c=>c.url.endsWith('/claim')).length,0);
+  assert.equal(s.exchanges.length,0);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM local_pending').get().n,1);
+  const completed=await s.client.complete(s.req(true));
+  assert.equal(completed.status,200);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM local_pending').get().n,0);
+});
+
+test('complete rejects absent or untrusted Origin and missing/wrong CSRF before consumption',async()=>{
+  for(const headers of [
+    {origin:'https://attacker.example.invalid'},
+    {origin:''},
+    {'x-oauth-csrf':''},
+    {'x-oauth-csrf':'invalid'},
+  ]){
+    const s=await setup();await s.prepare();await s.callback();
+    const attempt=await s.client.complete(s.req(true,headers));
+    assert.equal(attempt.status,403);
+    assert.equal(s.calls.filter(c=>c.url.endsWith('/claim')).length,0);
+    assert.equal(s.exchanges.length,0);
+    assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM local_pending').get().n,1);
+    const retry=await s.client.complete(s.req(true));
+    assert.equal(retry.status,200);
+    assert.equal(s.exchanges.length,1);
+  }
+  const s=await setup();await s.prepare();await s.callback();
+  const absentOrigin=new Request(SITE+'/connect/complete',{method:'POST',headers:{'x-test-owner':s.owner,cookie:s.browser,'x-oauth-csrf':s.csrf}});
+  assert.equal((await s.client.complete(absentOrigin)).status,403);
+  assert.equal(s.calls.filter(c=>c.url.endsWith('/claim')).length,0);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM local_pending').get().n,1);
 });
 
 test('expired or wrong redirect pending data is rejected without claim or exchange',async()=>{
