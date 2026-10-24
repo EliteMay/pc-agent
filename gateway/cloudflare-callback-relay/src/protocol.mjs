@@ -27,9 +27,19 @@ export function bytes(value) {
 export function keyBytes(key) { try { const raw=bytes(key); if(raw.length!==32) throw 0; return raw; } catch { throw new RelayError('setup_required'); } }
 export async function sha(value) { return base64(await crypto.subtle.digest('SHA-256',utf8.encode(value))); }
 export const random = () => base64(crypto.getRandomValues(new Uint8Array(32)));
+// This relay is tied to one existing Cloudflare Worker. Never accept another
+// *.workers.dev tenant from a configuration typo or attacker-provided value.
+// The exact .invalid origin is reserved for offline tests only.
+export const RELAY_PRODUCTION_ORIGIN='https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev';
+export const RELAY_TEST_ORIGIN='https://relay.example.invalid';
 export function relayOrigin(value) {
-  try { const u=new URL(value); if(u.protocol!=='https:'||u.username||u.password||u.port||u.pathname!=='/'||u.search||u.hash||!/(\.workers\.dev|\.example\.invalid)$/.test(u.hostname)) throw 0; return u.origin; }
-  catch { throw new RelayError('setup_required'); }
+  try {
+    const u=new URL(value);
+    if(typeof value!=='string'||u.href!==value+'/'&&u.href!==value||
+      ![RELAY_PRODUCTION_ORIGIN,RELAY_TEST_ORIGIN].includes(u.origin)||
+      u.pathname!=='/'||u.search||u.hash||u.username||u.password||u.port) throw 0;
+    return u.origin;
+  } catch { throw new RelayError('setup_required'); }
 }
 export const safeHeaders = { 'cache-control':'no-store', 'referrer-policy':'no-referrer', 'x-content-type-options':'nosniff' };
 export const safeJson = (value,status=200) => Response.json(value,{status,headers:safeHeaders});
