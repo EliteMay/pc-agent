@@ -92,3 +92,18 @@ For each legacy client, separately assess current consent/registration and the m
 - Read-only Supabase device table aggregate showed **one paired device**, `agent_version=0.11.6`, with a recent `last_seen_at` on **2026-10-24** and a heartbeat within 10 minutes of the query. This confirms only the Windows Agent → Supabase heartbeat path at that instant, not ChatGPT → Sites → Gateway → Agent authenticated command round trip. No PC command was sent or queued.
 - Independent review found a misleading capability claim in the draft's `gateway_probe` response: the original gateway continued to report `safeWrite:true` / `orchestration:true` even when the Site client had only three read-only/bootstrap tools. Both authenticated GET metadata and MCP `gateway_probe` now use the same `clientCapabilities(clientPolicy)` helper. The Site client reports `readOnly:true`, `safeWrite:false`, `orchestration:false`, while explicitly privileged legacy clients retain their prior flags. Added a regression test.
 - Until a separate production release and client ID verification, the updated draft source has no effect on the running Supabase gateway. Sites saved version 10, Cloudflare relay, OAuth flags, secrets, DB schema and PC action state have not been modified.
+
+## 2026-10-24 offline Site-to-Agent bootstrap contract test
+
+As a separate **non-network** readiness check, `agent/test/goal29-site-bootstrap.test.js` now combines:
+1. The real `resolveClientPolicy` / `isToolAllowed` / `visibleTools` policy helpers in this PR.
+2. The existing `runQueueOnce` and `createPingTool` from the genuine local Agent.
+3. A fully in-memory command envelope / fake queue transport, and an in-memory operation journal.
+
+Four assertions cover an approved Sites OAuth client returning `pong` from the Agent runner, rejection of screenshot/GUI/write/task tools **before enqueue**, denial of spoofed headers lacking a verified JWT `client_id`, and the three-name bootstrap `tools/list` contract.
+
+**Evidence:** Agent CI (Windows) run [40099238639](https://github.com/EliteMay/pc-agent/actions/runs/40099238639) succeeded; Gateway CI run [40099242882](https://github.com/EliteMay/pc-agent/actions/runs/40099242882) succeeded. The run creates **no** Supabase command or external request. It is deliberately not counted as a genuine ChatGPT → Sites → authenticated Gateway → Windows PC end-to-end test.
+
+**Read-only live inventory only:** the paired PC Agent's heartbeat to Supabase was fresh at the time of inspection; historical `kaito_pc_commands` aggregates showed 8 completed `ping` and 2 completed `notepad_gui` records in the previous 30 days (latest on 2026-10-08). These historical records are not attributable to a successful *current* ChatGPT Sites integration and should not close Issue #29.
+
+Release gate unchanged: confirm exact OAuth client ownership and legacy compatibility, keep Sites/Relay OAuth OFF, do not deploy this draft or send a PC command without separate authorization.
