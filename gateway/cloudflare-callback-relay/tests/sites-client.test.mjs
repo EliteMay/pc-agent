@@ -86,7 +86,7 @@ test('complete rejects absent or untrusted Origin and missing/wrong CSRF before 
   ]){
     const s=await setup();await s.prepare();await s.callback();
     const attempt=await s.client.complete(s.req(true,headers));
-    assert.equal(attempt.status,403);
+    assert.equal(attempt.status,headers.origin!==undefined?403:401);
     assert.equal(s.calls.filter(c=>c.url.endsWith('/claim')).length,0);
     assert.equal(s.exchanges.length,0);
     assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM local_pending').get().n,1);
