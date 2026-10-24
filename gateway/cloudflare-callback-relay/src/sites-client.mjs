@@ -1,7 +1,7 @@
 // SERVER ONLY. Call from the existing Sites handler after trusted dispatch
 // identity resolution. Do not expose this module, its keys or claim body to UI/MCP.
 import { RelayError, SITE_ORIGIN, TTL, opaque, dummyCode, oauthCode, plainObject, relayOrigin,
-  keyBytes, sha, signedRequest, readText, safeJson, safeError } from './protocol.mjs';
+  keyBytes, RELAY_PRODUCTION_ORIGIN, sha, signedRequest, readText, safeJson, safeError } from './protocol.mjs';
 
 function checkRoute(request,action) {
   const u=new URL(request.url),path=action==='prepare'?'/oauth/start':'/connect/complete';
@@ -30,7 +30,8 @@ export function createSitesRelayClient({origin,key,authorize,loadPending,consume
   origin=relayOrigin(origin);keyBytes(key);
   // The Site's trusted server must opt in explicitly. Neither browser args
   // nor MCP tool input can select this mode.
-  if(!['dummy','live'].includes(mode)||(mode==='live'&&liveEnabled!==true)) throw new RelayError('setup_required');
+  if(!['dummy','live'].includes(mode)||
+    (mode==='live'&&(liveEnabled!==true||origin!==RELAY_PRODUCTION_ORIGIN))) throw new RelayError('setup_required');
   const exchange=mode==='dummy'?exchangeDummy:exchangeOAuthCode;
   if([authorize,loadPending,consumePending,invalidatePending,exchange,fetcher].some(fn=>typeof fn!=='function')||
     !Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>10000) throw new RelayError('setup_required');
