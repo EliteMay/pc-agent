@@ -27,3 +27,32 @@ The verified `ctx.jwtClaims.client_id` from `withSupabase({auth:"user"})` is use
 - Supabase OAuth token security: https://supabase.com/docs/guides/auth/oauth-server/token-security
 - Supabase server auth modes (`jwtClaims`): https://github.com/supabase/server/blob/main/docs/auth-modes.md
 - Goal and release gate: Issue #29 and PR #42.
+
+## 2026-10-24 independent second-pass compatibility audit (read-only evidence)
+
+The following observations were obtained via read-only Supabase auth catalog queries and the official connected Plugin Creator metadata. **This review did not authenticate using OAuth, and it did not read or print OAuth client IDs, secrets, bearer tokens or other identity values.**
+
+| Evidence | Result | Interpretation / limit |
+| --- | --- | --- |
+| `auth.oauth_clients` aggregate | 3 registered (2 public, 1 confidential) | Registration is not evidence of a working token or active session. |
+| Callback categories | 1 client has a `chatgpt.site` redirect; 0 have a `workers.dev` redirect | One confidential registration is a **candidate** for the Site's OAuth flow; identity and runtime behavior remain unverified. Cloudflare callback registration is still missing. |
+| Private legacy Plugin `kaito-pc-agent-oauth-readonly-v2` v0.3.0 | Manifest has `mcp.json` / `.mcp.json` and direct Supabase URL | It is distinct from the Sites Chrome plugin; don't assume they share an OAuth client ID. |
+| Private Sites Plugin (v1.0.0) | Site-backed, fixed diagnostic; Supabase/PC link not active | Its existing successful `gateway_probe` does **not** demonstrate a signed Supabase client token. |
+| Active Supabase OAuth Edge Function | v15 source matched the current GitHub `main` before this PR | PR code is **not deployed** and does not yet gate any live request. |
+| GitHub Gateway CI on PR #47 initial head | Node policy test and `deno check` succeeded after TS type fix | CI success is not authenticated integration or deployment verification. |
+
+### Compatibility decision: BLOCK DEPLOY, not a design rejection
+
+- **Site client registration must be uniquely attributed**, using the official OAuth registration and Site's saved OAuth client configuration, not merely matching a redirect domain. Keep the actual ID out of the public repository, issue comments and logs.
+- **Do not automatically grant privileged capabilities to both existing public OAuth registrations.** First prove which (if any) belongs to the prior private Plugin, what operations must remain supported, and whether an actual valid token contains a matching `client_id`. An unidentified client stays denied.
+- **Do not deploy without configuring the exact approved identifiers.** With no `KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID`, all authenticated Gateway clients fail closed; this is a known potential legacy Plugin regression, not a rollout-ready release.
+- The Site client cap to `gateway_probe` / `relay_ping` / `ping` is **stage 1 only**. To meet Issue #29, the later capture/GUI phases require deliberately scoped escalation with separate local approvals and fresh security tests; simply removing this deny gate would undo the defense.
+- The Cloudflare callback redirect is not in the observed OAuth registry. **Never** bypass the existing callback/log/Relay gate by silently switching to a direct Site callback.
+- The Sites header overwrite and browser/MCP owner identity are still unverified. `client_id` authorization is defense in depth, not proof of either.
+
+### Remaining approval-gated live validation
+
+1. Confirm exact Site and legacy OAuth client registrations through official management readback without exposing values. Do not assign any unknown client full capabilities.
+2. On a safe test token, confirm only **boolean** checks that the verified JWT claim exists and matches the intended client, without revealing the token or claim.
+3. In a separately approved deployment only, assert `tools/list` is reduced for the Site client and that direct `tools/call` for `task_step`, `capture_notepad` and `notepad_gui` is rejected before queue creation. The approved legacy client's existing function must remain intact.
+4. Confirm rollback/readback and local approval controls. Do not send PC commands in this audit or enable OAuth/Relay.
