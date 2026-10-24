@@ -364,3 +364,16 @@ Updated `gateway/cloudflare-callback-relay/tests/sites-client.test.mjs` to POST 
 **安全な実装順:** 保存版10の本人認証済み正式source readbackで、GET表示とPOST消費、PKCE/verifier、redirect_uri、token交換ハンドラを行単位で確認する。その実コードに合わせ、既存Workerとadapterへ`dummy`の既存動作を壊さない明示的な`live`モードを**ソース上だけ**追加し、ライブモードがデフォルトOFF/SecretなしOFF/未登録callback OFFでfail-closedになるテストを用意する。認可コードはログ・Issue・テスト出力に出さず、署名・本人/ブラウザbinding・一回限りclaim・TTL・固定Origin/redirect・POST+CSRFを維持する。Site OAuth Client ID/legacy互換性、正式callback登録、PKCEとconfidentialの実条件、復旧ゲート、本人の個別変更承認が満たされるまで**デプロイも実認可コード発行もしない**。
 
 この段落は実装条件の更新であり、上記live処理を完成したと主張するものではない。既存dummy-onlyデプロイと未公開PR #42は維持する。
+
+## 2026-10-25: WorkerとSites参照Adapterにgated live OAuthコード経路を実装（ソースのみ）
+
+**最新実装:** [PR #42](https://github.com/EliteMay/pc-agent/pull/42) の `src/worker.mjs` / `src/sites-client.mjs` / `src/protocol.mjs` に、既存dummyモードを維持したままlive用コード受信→AES-GCM封印→D1一回限りclaim→Siteサーバーの`exchangeOAuthCode`callbackへの受け渡しを追加した。
+
+- Workerは`RELAY_MODE=live`と`RELAY_LIVE_ENABLED=true`（文字列）の**両方**が必要（初期値・現在本番値は変更なし）。Siteは`mode='live'`, `liveEnabled=true`とserver-only`exchangeOAuthCode`が必要。
+- Liveとdummyは異なる`state_hash`名前空間とAES-GCM AADを使うため、同じstateを用いても別モードのprepared/ready行を消費できない。D1 schema変更なし、旧dummy側は従来Hash/AAD維持。
+- 既存の署名/owner+browser binding・POST+Origin/CSRF・期限・一回限りclaim・fixed 303・no query/log code・dummy code拒否/実コードの有界検証を維持。実OAuthの値や実ネットワーク通信を使うテストは未実施。
+- [Relay CI 40108825815](https://github.com/EliteMay/pc-agent/actions/runs/40108825815): 80/80 PASS, Node check, Wrangler **dry-run** artifact。 [Gateway CI 40108825799](https://github.com/EliteMay/pc-agent/actions/runs/40108825799): PASS。現配信Workerとのバイナリ同一性やSite本番への結線を証明するものではない。
+
+**残りの本当の実装と運用ゲート:** 保存版10の正式なサーバーソースreadbackで実PKCE token交換処理とGET表示専用／POST consume+claimを確認した上で、参照`createSitesRelayClient({mode:'live', liveEnabled:true, exchangeOAuthCode})`を既存Hosted入口へ統合する必要がある。Worker固定`/oauth/callback`がSupabase登録・認可開始・Site pending・token交換のredirect URIとして一致することが必要（現在の登録はSite callbackでありそのままでは一致しない）。Cloudflareの現配信コード/設定・本人所有権・callbackログ残留リスク・Gateway PR #47・旧Plugin権限・復元可能性と別途本人承認が確定するまで実OAuth/Relay有効化・Supabase OAuth登録変更・本番Deployは禁止。
+
+**判定:** **GO for source-only development validation**, **NO-GO for production deployment, actual OAuth issuance, and PC commands**。Issue #29の4条件は未達。
