@@ -45,6 +45,25 @@ test('Site cannot sign requests or initialize adapter with a different Worker ho
   }),e=>e.code==='setup_required');
 });
 
+test('live OAuth rejects the offline-only test origin even with both opt-ins enabled',async()=>{
+  const f=await fixture({env:{
+    RELAY_MODE:'live',
+    RELAY_LIVE_ENABLED:'true',
+    RELAY_ORIGIN:RELAY_TEST_ORIGIN,
+  }});
+  const result=await f.prepare();
+  assert.equal(result.status,503);
+  assert.deepEqual(await result.json(),{error:'setup_required'});
+  assert.equal(f.DB.dump(),'[[],[],[]]');
+
+  assert.throws(()=>createSitesRelayClient({
+    origin:RELAY_TEST_ORIGIN,key:KEY,
+    mode:'live',liveEnabled:true,exchangeOAuthCode:async()=>{},
+    authorize:async()=>'',loadPending:async()=>null,consumePending:async()=>false,
+    invalidatePending:async()=>{},
+  }),e=>e.code==='setup_required');
+});
+
 test('Worker rejects callback and signed requests if RELAY_ORIGIN is not pinned',async()=>{
   const f=await fixture({env:{RELAY_ORIGIN:'https://attacker.workers.dev'}});
   const result=await f.prepare();
