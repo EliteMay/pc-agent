@@ -144,3 +144,12 @@ The smoke does **not** call PC `ping` or any screenshot/GUI/task/file operation,
 **Current ChatGPT plugin read-only diagnostic attempt:** the connected Sites Plugin exposes a `relay_ping` tool but returned an error meaning connection state/execution result was not confirmed. No retry was issued; `ping` was not called. Read-only Supabase log aggregation found no matching OAuth Gateway function event during the narrow inspected window. Missing logs alone cannot prove the request did not arrive. Independent device heartbeat remained fresh. **No OAuth E2E success has been claimed.**
 
 **Release gate remains BLOCK DEPLOY:** Sites Hosted Secret client-ID equality is unverified; legacy loopback registrations must not be auto-privileged; PR #42 callback/log security conditions are unverified; no approval to enable live OAuth/Relay, deploy the Gateway, or send a Windows command has been obtained.
+
+## 2026-10-25 OAuth smoke blocker fixed in draft, not executed live
+
+Code audit reproduced a concrete defect in the previously drafted opt-in OAuth smoke script's token guard: the character class `/[\\\\s\\\\r\\n]/` unintentionally matched ordinary literal `s` / `r` characters as well as backslashes/newlines, leading to false rejection of otherwise plausible OAuth tokens. It also failed to reliably reject tabs.
+
+- Fix: move the guard to a pure `isSafeBearerToken` helper in `tests/oauth-site-smoke-validation.mjs` and use the correct `/\\s/u` whitespace pattern. Keep no-token printing and no-redirect policies unchanged.
+- Regression tests: normal JWT-looking token with `s` and `r` passes, whitespace (spaces, CR/LF, tabs, Unicode NBSP) and `Bearer ` prefixes are denied, missing/short/malformed values fail.
+- CI workflow also now runs the validation tests and triggers when only `tests/oauth-*.mjs` changes; previously the Gateway CI path filter did **not** include test-only edits.
+- **Only source tests / offline CI:** no token, live OAuth, relay, PC queue or PC command was executed. The Site secret/client-id equality, callback logging and legacy compatibility remain unverified. PR #47 is still Draft / BLOCK DEPLOY.
