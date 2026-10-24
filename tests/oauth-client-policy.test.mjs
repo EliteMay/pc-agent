@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   SITE_ALLOWED_TOOLS,
+  clientCapabilities,
   isToolAllowed,
   resolveClientPolicy,
   visibleTools,
@@ -71,4 +72,24 @@ test("Gateway routes deny disallowed calls before task and queue dispatch", () =
   assert.ok(guard < handler.indexOf('if (name === "task_step")'));
   assert.ok(guard < handler.indexOf("await enqueueTool(ctx, name, args)"));
   assert.doesNotMatch(handler.slice(0, guard), /req\.headers\.get\(.*client_id/);
+});
+
+test("Site capability metadata cannot advertise write or orchestration", () => {
+  assert.deepEqual(clientCapabilities("site"), {
+    readOnly: true, safeWrite: false, orchestration: false,
+  });
+  assert.deepEqual(clientCapabilities("privileged"), {
+    readOnly: false, safeWrite: true, orchestration: true,
+  });
+  assert.deepEqual(clientCapabilities("deny"), {
+    readOnly: false, safeWrite: false, orchestration: false,
+  });
+
+  const source = readFileSync(new URL("../gateway/oauth-pc-agent/index.ts", import.meta.url), "utf8");
+  const handler = source.slice(source.indexOf("const handler = async"));
+  const getRoute = handler.slice(handler.indexOf('if (req.method === "GET")'), handler.indexOf('if (req.method !== "POST")'));
+  const probeRoute = handler.slice(handler.indexOf('if (name === "gateway_probe")'), handler.indexOf('if (name === "relay_ping")'));
+  assert.match(getRoute, /\.\.\.clientCapabilities\(clientPolicy\)/);
+  assert.match(probeRoute, /\.\.\.clientCapabilities\(clientPolicy\)/);
+  assert.doesNotMatch(probeRoute, /safeWrite:\s*true|orchestration:\s*true|readOnly:\s*false/);
 });
