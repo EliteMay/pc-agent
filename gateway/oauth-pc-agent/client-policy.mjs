@@ -26,8 +26,10 @@ function parsePrivilegedIds(value) {
  * `jwtClaims` must be provided by the JWT-verifying Supabase middleware.
  * Any missing/malformed configuration or claim denies the entire client.
  * Privileged client IDs are explicit and must never include the Site ID.
+ * @param {{client_id?: unknown} | null | undefined} jwtClaims
+ * @param {{siteClientId?: string, privilegedClientIds?: string}} [config]
  */
-export function resolveClientPolicy(jwtClaims, { siteClientId, privilegedClientIds = "" } = {}) {
+export function resolveClientPolicy(jwtClaims, { siteClientId = "", privilegedClientIds = "" } = {}) {
   if (!isValidClientId(siteClientId)) return "deny";
   const privileged = parsePrivilegedIds(privilegedClientIds);
   if (!privileged || privileged.includes(siteClientId)) return "deny";
