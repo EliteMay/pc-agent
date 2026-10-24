@@ -130,3 +130,26 @@ node tools/verify-log-settings.mjs < private-effective-settings.json
 - [Script settings GET](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/settings/methods/get/)
 - [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/)
 - [検証記録](../../docs/issue-29-cloudflare-relay-verification.md)
+
+## 2026-10-25 実OAuthモードのソース実装（デフォルトOFF・未デプロイ）
+
+**本READMEの従来の「dummy-only」は実環境と既定設定について引き続き正しい。** PR #42の未公開ソースには、将来の実OAuth連携用の**明示的なopt-in**経路を追加した。これは公開承認でも運用設定変更でもない。
+
+### 現在実装したサーバー側の経路
+
+- Cloudflare Workerの既定 `RELAY_MODE=dummy` は維持。実OAuth受理にはServer-side config **`RELAY_MODE=live` と `RELAY_LIVE_ENABLED=true`（文字列）両方**が必要。片方だけ・未知の設定・署名鍵/暗号鍵/D1欠落は503 `setup_required`。この2値は運用承認を代行しない。
+- Workerの`/prepare`→`GET /oauth/callback`→`/claim`は既存のHMAC署名・Origin固定・D1暗号化・期限300秒・rate制限・一回限りclaim・queryなし303を再利用する。実モードは`oauthCode`でのみ認可コードを受け入れ、ダミーコードを拒否。認可拒否は従来の有限な`denied`結果に正規化する。
+- **DB schema変更なし**で、実モードの`state_hash`を`SHA256("kaito-relay|live|"+state)`へ名前空間分離。暗号化AADにもmodeを束縛する。既存dummy行は以前と同じHash/AADのまま。モード変更前のpendingが別モードのcallback/claimへ渡ることを防ぐ。
+- Sites参照`createSitesRelayClient`は既定`mode='dummy'`、実モードは`mode='live', liveEnabled=true, exchangeOAuthCode`（server-only callback）の明示設定を要求。GET完了は禁止、同一Origin+CSRF付きPOSTのみpendingを一回消費する。Workerとprepare responseのmode不一致や戻り値schema異常は503で停止する。callbackは**生のaccess/refresh tokenをブラウザへ出さない**。
+- 実トークン交換のHTTP処理はここで複製しない。保存版10のSitesが持つ **confidential client + PKCE verifierを利用した既存のserver-only交換処理**を`exchangeOAuthCode` callbackとして注入する。トークン保管・本人認可はSites側の既存権威境界に残す。
+
+### 本番対応前に必須の接続確認
+
+1. 正式なSites管理操作で**保存版10の実サーバー側ソース**を取得し、`GET /connect/complete`が表示専用、`POST /connect/complete`が本人セッション/Cookie/Origin/CSRFでconsume+claimすることを照合。正しい`authorize`の`redirect_uri`・保留状態の`redirectUri`・confidential PKCEのtoken交換`redirect_uri`が、登録済みWorker固定URL `<RELAY_ORIGIN>/oauth/callback` と完全一致するか検査する。実Siteへのコード取り込み・公開は**別途承認**。
+2. Cloudflareの現行配信ソース・Secret共有・ログ残留リスク・D1・旧Versionを正式管理の読み取りで再確認し、実OAuthの許可/互換性とロールバックを評価。既存D1 pendingを十分に失効させてからモード切替。
+3. Supabase OAuth confidential登録とのSite Secret ID一致、旧Pluginクライアントへの影響、PR #47 Gatewayのクライアント別認可を確定。**旧Gatewayを無制限で残してSite用トークンを発行しない。**
+4. 本番変更・OAuth consent・PC commandは別々の本人明示承認が必要。無害な認証済みprobe→relay_ping→PCへの一回限りのping→画面/GUI実証の順で進める。
+
+**制限:** 実OAuth codeの実環境形式は未実測。現`oauthCode`は文字数1〜512の保守的URL-safe文字だけを許可するため、Supabaseの実発行値がこのsubset外なら拒否になる。その場合、実値をログへ出さず、公式仕様/安全な分類だけからvalidatorを調整する。ダミーモードの成功やCIのモックテストを実OAuth/Windows PCの接続成功と数えない。
+
+**実施しなかった操作:** 本番Worker Deploy、`RELAY_MODE`/`RELAY_LIVE_ENABLED`の設定変更、Sites保存・公開、Secret/DB/OAuth callback登録、実認可コード・token発行、PC操作。
