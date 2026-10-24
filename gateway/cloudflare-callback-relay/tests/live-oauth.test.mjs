@@ -77,8 +77,7 @@ test('live Site adapter requires explicit mode switch and an exchange callback',
 
 test('live Site adapter performs PKCE-bound exchange only through authenticated POST',async()=>{
   // Fully offline mock Site controller: no OAuth token endpoint or Worker network.
-  const { DatabaseSync }=await import('node:sqlite');
-  const { digest, epoch, signed }=await import('./helpers.mjs');
+  const { epoch }=await import('./helpers.mjs');
   const { createWorker }=await import('../src/worker.mjs');
   const { database }=await import('./helpers.mjs');
   const DB=database(),worker=createWorker({clock:()=>epoch});
@@ -107,8 +106,9 @@ test('live Site adapter performs PKCE-bound exchange only through authenticated 
   assert.equal(exchanges.length,0);
   const finished=await client.complete(request());
   assert.equal(finished.status,200);
-  assert.deepEqual(await finished.json(),{state:'checking',mode:'live',gateway_authenticated:false});
+  const responseText=await finished.text();
+  assert.deepEqual(JSON.parse(responseText),{state:'checking',mode:'live',gateway_authenticated:false});
   assert.deepEqual(exchanges,[{code:liveCanary,state,code_verifier:verifier,redirect_uri:ORIGIN+'/oauth/callback'}]);
-  assert.ok(!(await finished.clone().text()).includes('offline-private-access-token'));
+  assert.ok(!responseText.includes('offline-private-access-token'));
   assert.equal((await client.complete(request())).status,401);
 });
