@@ -56,3 +56,15 @@ The following observations were obtained via read-only Supabase auth catalog que
 2. On a safe test token, confirm only **boolean** checks that the verified JWT claim exists and matches the intended client, without revealing the token or claim.
 3. In a separately approved deployment only, assert `tools/list` is reduced for the Site client and that direct `tools/call` for `task_step`, `capture_notepad` and `notepad_gui` is rejected before queue creation. The approved legacy client's existing function must remain intact.
 4. Confirm rollback/readback and local approval controls. Do not send PC commands in this audit or enable OAuth/Relay.
+
+## 2026-10-24 exact Sites callback URL matching (read-only)
+
+An additional read-only query against `auth.oauth_clients` tested only aggregate booleans against the **exact currently published Site host** (no client ID, token, redirect URI list, or secret was read into the public report):
+
+- **Exactly 1 confidential OAuth client** has a registered redirect URI containing `kaito-pc-agent-web-bridge.kaito2526.chatgpt.site`.
+- **0 public clients** have a registered redirect URI containing that hostname.
+- **0 clients** have a registered `workers.dev` redirect URI.
+
+This narrows the likely Sites OAuth registration to one record, **but is not proof that deployed Sites saved-v10 actually uses its `client_id`**. This chat's available management tools expose only the connected Site plugin wrapper and a fixed probe, not the hosted Site source or secure configuration readback. Comparing the Site's actual OAuth client setting to the registration must take place via its formal Site management interface. Avoid posting raw client IDs into public GitHub logs/issues.
+
+Release decision unchanged: **Draft only, no deploy, no OAuth/Relay activation, no PC actions**.
