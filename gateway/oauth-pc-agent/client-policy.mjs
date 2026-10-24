@@ -52,3 +52,12 @@ export function visibleTools(allTools, policy) {
   if (policy === "site") return allTools.filter((tool) => SITE_TOOL_NAMES.has(tool.name));
   return [];
 }
+
+/** Only advertise capabilities actually available to this verified OAuth client. */
+export function clientCapabilities(policy) {
+  return {
+    readOnly: policy === "site",
+    safeWrite: policy === "privileged",
+    orchestration: policy === "privileged",
+  };
+}
