@@ -8,10 +8,12 @@ on:
     paths:
       - 'gateway/**'
       - '.github/workflows/gateway-ci.yml'
+      - 'tests/oauth-*.mjs'
   pull_request:
     paths:
       - 'gateway/**'
       - '.github/workflows/gateway-ci.yml'
+      - 'tests/oauth-*.mjs'
 
 permissions:
   contents: read
@@ -26,7 +28,7 @@ jobs:
         with:
           node-version: '22'
       - name: Test OAuth client scope and dispatch guards
-        run: node --test tests/oauth-client-policy.test.mjs
+        run: node --test tests/oauth-client-policy.test.mjs tests/oauth-site-smoke-validation.test.mjs
       - name: Verify safe OAuth live-smoke script (do not make network calls)
         run: |
           node --check tests/oauth-site-live-smoke.mjs
