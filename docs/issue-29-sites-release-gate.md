@@ -328,3 +328,13 @@ SQLの解析は最小の字句解析（文字列・引用識別子・コメン�
 1. Work: 上記A①〜⑥を保存版8のソースで読み取り、結果を記録。
 2. 本人: 新しい署名鍵はSites Hosted SecretsのUIとWorkerの両方へ本人が直接投入（チャットへ出さない）。実Worker送信は別承認。
 3. 外向き通信の実測は、署名なしの `/prepare` が `401 authentication_required` を返す（D1書込みなし）ことの確認が最小。署名鍵の登録より先にSiteの外向きHTTPSが通るかを切り分けられる。
+
+## 2026-10-25: GitHub Relay adapter GET state-mutation mismatch corrected (source-only)
+
+**Previous confirmed finding (§7 and 2026-10-21 Claude review):** The reference `gateway/cloudflare-callback-relay/src/sites-client.mjs` originally accepted a GET `/connect/complete` and then consumed `pending` + requested `/claim`; moreover it allowed a missing `Origin` on GET and did not check the completion CSRF token. Those findings describe **past code**, not the updated PR #42 branch.
+
+**Corrected on PR #42:** The reference `complete(request)` now accepts only POST with exact `SITE_ORIGIN` and an exact match of `x-oauth-csrf` to trusted server-side `pending.csrf` **before any `consumePending`**. Missing Origin, cross-origin requests, missing/wrong CSRF and GET are rejected without consuming pending, performing a Worker `/claim` or exchanging any code. The `prepare(request)` route remains same-origin POST + CSRF. The Worker dummy callback continues returning a query-free 303 to Sites `GET /connect/complete`; **the Sites hosted GET handler must remain a separate display-only endpoint**. It must not call the updated `complete()` or mutate pending; the browser's authenticated POST follows only with Origin + CSRF.
+
+Updated `gateway/cloudflare-callback-relay/tests/sites-client.test.mjs` to POST for the legitimate flow and added direct tests proving GET non-mutation, pending preservation on invalid Origin/CSRF, and successful legitimate completion after rejection. Cloudflare dummy CI passed at [40106862549](https://github.com/EliteMay/pc-agent/actions/runs/40106862549) with tests, checks and artifact dry-run. **Source and offline mocks only**, not proof of Site saved version 10's runtime wiring, authenticated browser identity, live callback logging, or client-ID compatibility. No GitHub merge, Site/Worker deploy, OAuth/Relay enabling, Cloudflare/DB/Secrets or PC command changes.
+
+**Release gates still BLOCKED:** direct Site Source v10 vs adapter method wiring/readback, actual OAuth client ID equality, callback log protection, explicit legacy compatibility decision and a separately authorized production deployment all remain unresolved.
