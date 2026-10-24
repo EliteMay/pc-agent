@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isSafeBearerToken } from "./oauth-site-smoke-validation.mjs";
 /**
  * Issue #29, approval-gated, read-only OAuth Gateway smoke.
  *
@@ -81,8 +82,7 @@ async function main() {
     return;
   }
   const token = process.env.PC_AGENT_OAUTH_ACCESS_TOKEN;
-  if (typeof token !== "string" || token.length < 40 ||
-      /[\\s\\r\n]/.test(token) || token.startsWith("Bearer ")) {
+  if (!isSafeBearerToken(token)) {
     fail("preflight", "missing_or_invalid_token_environment");
   }
 
