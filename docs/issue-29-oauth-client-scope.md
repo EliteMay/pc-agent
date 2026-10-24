@@ -128,3 +128,19 @@ Accordingly, **all reachable Gateway endpoints accepting Site bearer tokens must
 2. Explicit legacy compatibility decision: the two generic loopback clients must **not** be bulk-listed as privileged. Without proof of necessity, the safe PR #47 default is zero privileged clients, but this would intentionally deny previously authorized legacy clients after deployment. Approval of that compatibility tradeoff is required.
 3. The callback/log protection gate (PR #42) and separately approved OAuth enablement must be satisfied before any live token is issued. No redirect/Secret/DB/PC mutations were made in this analysis.
 4. For the eventual protected real-world test, independently check Site client `tools/list`, a harmless `gateway_probe`, a no-side-effect denial of disallowed `tools/call`, then `relay_ping`; **only after authorization and an explicit PC-action approval** may the actual `ping` command be queued.
+
+## 2026-10-24 real OAuth read-only smoke preparation (no live token used)
+
+A new scoped smoke script at `tests/oauth-site-live-smoke.mjs` performs **no network traffic by default**. Its `--live` mode is intentionally available only after a **separately approved** OAuth/Relay/Gateway configuration rollout and with a bearer token supplied securely as the process environment variable `PC_AGENT_OAUTH_ACCESS_TOKEN`. Never pass the token as a CLI argument or commit it to source, documentation, a CI variable, or a chat.
+
+When explicitly enabled, the smoke script pins the exact existing Supabase Gateway host/path, disallows bearer-forwarding HTTP redirects, does not log raw responses, and performs only:
+1. Authenticated `GET` capability metadata (must be read-only and reject write/orchestration).
+2. `tools/list` (must contain **exactly** `gateway_probe`, `relay_ping`, `ping`).
+3. `tools/call` for `gateway_probe` (authenticated, scoped).
+4. `tools/call` for `relay_ping` (read-only paired-device metadata; **no PC command queued**).
+
+The smoke does **not** call PC `ping` or any screenshot/GUI/task/file operation, cannot establish the full Issue #29 E2E criterion, and does not run automatically using a secret. The CI runs only `node --check tests/oauth-site-live-smoke.mjs` and `node tests/oauth-site-live-smoke.mjs` **without** `--live` or any token.
+
+**Current ChatGPT plugin read-only diagnostic attempt:** the connected Sites Plugin exposes a `relay_ping` tool but returned an error meaning connection state/execution result was not confirmed. No retry was issued; `ping` was not called. Read-only Supabase log aggregation found no matching OAuth Gateway function event during the narrow inspected window. Missing logs alone cannot prove the request did not arrive. Independent device heartbeat remained fresh. **No OAuth E2E success has been claimed.**
+
+**Release gate remains BLOCK DEPLOY:** Sites Hosted Secret client-ID equality is unverified; legacy loopback registrations must not be auto-privileged; PR #42 callback/log security conditions are unverified; no approval to enable live OAuth/Relay, deploy the Gateway, or send a Windows command has been obtained.
