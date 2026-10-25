@@ -67,3 +67,29 @@ PR #42のライブ候補のみ、`verifyIdentityBinding(request)`を必須にし
 追加テストでは（a）検証関数不在、（b）同じメール・偽装ヘッダーと異なる検証済みprincipal、（c）OAuth開始後の認証principal差し替えによるclaim拒否を確認する。live pending作成時にも正しい`principalId`を暗号化保存できること、および実ブラウザ/MCPで同じセッション本人を保証できることは別途確認が必要。Gateway PR #47（JWT実トークン検証）も別のrelease gateとして維持する。
 
 **変更禁止条件:** Sites未公開保存版11、本番保存版10、Sites Secret、Supabase、Cloudflare Worker/D1、OAuthフラグ、家PCは一切変更しない。実認証、ログ/クライアントID照合、実Site本人境界は未検証。条件が未充足ならNO-GOを維持する。
+
+## 2026-10-25: Sites本人確認の公開仕様とSupabase OAuth主体を分離する（設計判断／未実装）
+
+**対象状態:** ユーザーの正式管理機能による報告では、Sites未公開保存版12（コミット `c9f2924499421ad3bfc0b6fcc152a17b9e863a4a`）は97/97件テスト成功・本人検証器未接続でfail-closed。本書から保存版12の実ソース／正式Receiptを独立再取得できていないため、この情報は報告値でありHosted実測ではない。本番は保存版10、OAuth/Relay OFF。PR #42と#47はDraft。
+
+### 調査で分かった事実と、まだ証明していないこと
+
+- [ChatGPT Sites公式 Data and connections](https://learn.chatgpt.com/docs/sites/data-and-connections) が本人情報として記載するサーバー転送ヘッダーは `oai-authenticated-user-email` と任意の `oai-authenticated-user-full-name`。固定・不変の `oai-authenticated-user-id`、任意HTTPクライアントによる同名ヘッダー偽装への明示的防御保証、browser/MCP本人ID相関キーは確認できない。**保証を確認できないことと、偽装が成立した実証は別**。
+- [Supabase OAuth Token Security](https://supabase.com/docs/guides/auth/oauth-server/token-security) によれば、OAuth Access Tokenは署名検証可能なJWTであり `sub`（ユーザーUUID）と `client_id`（OAuthクライアント識別子）を含む。[getClaims/getUser公式解説](https://supabase.com/docs/guides/auth/oauth-server/getting-started) は `getSession().user` 単独を認可根拠とせず、検証済みJWTまたはAuthサーバー照会を使うよう求める。
+- 読み取り専用のSupabase集計ではOAuth登録3件・同意記録合計2件、稼働中 `kaito-pc-agent-oauth-readonly` はv15。現行Gatewayが発行済みのSites本人JWTを受けている証拠にはならない。SiteのHosted Secretと登録済みconfidential clientのID完全一致は未検証。
+
+### 推奨の認証境界（実装済みと扱わない）
+
+1. **事前ログインと権限行使を分離:** ログイン開始時点でSupabase検証済みユーザーが存在するとは仮定しない。本人検証前のルートを設けるとしても、短命・単回・HttpOnly/SameSite/SecureなブラウザセッションとCSRF/Origin/PKCE/stateを持つOAuth開始処理に限定し、Gateway呼出し・トークン参照・PC操作は一切許可しない。これらを実装する前に保存版12の実コード・旧フロー・保存スキーマを確認する。現在の保存版12はfail-closedを維持する。
+2. **OAuth交換後の本人確定:** Site server-only内で既存のSupabase OAuth Code交換を行い、認証サーバー由来の署名検証済みユーザーUUIDが許可されたowner UUIDに一致し、`client_id` が正式に登録・照合されたSiteクライアントIDに一致することを確認する。Issuer、期限、Audience、Client、Session失効方針も検証し、不一致／欠落／検証失敗は認証セッションを確立せずトークンを無効化・安全に破棄する。秘密値・JWT・codeはUI/URL/ログに返さない。
+3. **ブラウザー認証とMCPを別扱い:** OAuth後に作ったサーバー署名／暗号化セッションは、それが真正に検証されたブラウザー操作にしか使えない。MCP要求が同じセッション／本人に結び付くことをプラットフォームが保証するまで、browserでのOAuth成功をMCPの権限証明に流用しない。必要なら既存Gatewayの検証済みSupabase Bearerと紐付ける別途の狭い本人Binding方式を評価するが、`owner email`、クライアント送信Cookie/ID、自己申告セッションだけでは紐付けない。
+4. **Gatewayで最終権限制御:** PR #47の既存 `withSupabase({auth:"user"})` の検証済みJWT `sub` / `client_id` および既存owner UUID allowlistを全到達可能な権限ルートに適用する。Site OAuth clientは当面 `gateway_probe` / `relay_ping` / `ping` だけ。MCP `tools/list`だけではなく直接 `tools/call` をキュー投入前に拒否。旧Pluginのclient IDを推測で特権付与しない。
+5. **明示承認付き段階検証:** 本人セッションの真正性とSite Secret一致が確認された後でも、Worker callback追加、署名鍵共有、残余ログ保護、旧Plugin互換、ロールバック、OAuth実同意は独立したrelease gate。最初は読み取り専用の `gateway_probe` まで。家PCのpingやGUI操作はさらに別途の明示承認と現地Manager承認が必要。
+
+### 重要な設計上の注意
+
+`verifyIdentityBinding` が不透明な `principalId` を返しても、それを**メールヘッダーや自作セッションから自己生成しただけでは本人の証明にならない**。特に、OAuthログイン前に「既に本人検証済みのprincipal」を要求する仕様と「OAuth自体で本人を検証する」仕様を混同するとログインのbootstrapが循環する。保存版12に適用する前に、どの処理がログイン前でどの処理がログイン後か、トークンの格納キーと実MCP呼出しに使う認証根拠を正式ソースで検証すること。
+
+**本変更はGitHub設計メモのみ**。未公開Sitesの書換え、Cloudflare/Supabase/Secret/DB/PCの変更、OAuthの実認証・有効化、JWTを伴う実E2Eは行わない。
+
+**回帰テストの必須観点:** 同メール・別主体、偽装ヘッダー、別Supabase user `sub`、別 `client_id`、期限切れ/改ざんJWT、本人変更途中のpending、別ブラウザCookie、MCPとブラウザのSession非共有、同時callback/二重claim、ログへのcode/token混入、旧Client影響、直接MCP `tools/call`での拒否。外部署名やHostedプロキシ保証をモックだけで「実証」としない。
