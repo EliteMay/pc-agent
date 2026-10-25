@@ -84,7 +84,7 @@ test('live Site adapter performs PKCE-bound exchange only through authenticated 
   const env={DB,...liveEnv,RELAY_ORIGIN:LIVE_ORIGIN,
     RELAY_SIGNING_KEY:KEY,RELAY_STORAGE_KEY:(await import('./helpers.mjs')).STORAGE_KEY};
   const state=value(),browser=value(),csrf=value(),verifier=value();
-  let pending={owner:'offline-owner',browserId:browser,state,csrf,verifier,
+  let pending={mode:'live',owner:'offline-owner',browserId:browser,state,csrf,verifier,
     expiresAt:epoch+300000,redirectUri:LIVE_ORIGIN+'/oauth/callback'};
   const exchanges=[];
   const client=createSitesRelayClient({
