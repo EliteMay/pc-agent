@@ -41,6 +41,18 @@ export function resolveClientPolicy(jwtClaims, { siteClientId = "", privilegedCl
   return "deny";
 }
 
+/**
+ * The auth middleware supplies both fields from one verified Supabase JWT.
+ * Never accept a claimed email/header as a fallback when the identity differs.
+ * This is a consistency check, NOT a JWT signature verifier.
+ */
+export function consistentJwtUserId(userClaims, jwtClaims) {
+  const userId = userClaims?.id;
+  const subject = jwtClaims?.sub;
+  return typeof userId === "string" && userId.length > 0
+    && typeof subject === "string" && subject === userId ? userId : null;
+}
+
 export function isToolAllowed(policy, toolName) {
   if (typeof toolName !== "string") return false;
   if (policy === "site") return SITE_TOOL_NAMES.has(toolName);
