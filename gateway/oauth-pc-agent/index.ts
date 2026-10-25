@@ -1011,6 +1011,7 @@ const handler = async (req: Request, ctx: any) => {
   // Missing client ID or missing deployment configuration fails closed.
   const clientPolicy = resolveClientPolicy(ctx?.jwtClaims, {
     siteClientId: Deno.env.get("KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID"),
+    mcpProbeClientIds: Deno.env.get("KAITO_PC_AGENT_MCP_PROBE_OAUTH_CLIENT_IDS") ?? "",
     privilegedClientIds: Deno.env.get("KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS") ?? "",
   });
   if (clientPolicy === "deny") {
