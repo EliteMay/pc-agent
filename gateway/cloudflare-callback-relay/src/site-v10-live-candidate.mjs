@@ -80,6 +80,15 @@ export function createSitesV10LiveCandidate({
         const owner=await authorize(request);
         if(typeof owner!=='string'||!owner||owner.length>200) throw new RelayError('authentication_required');
         const pending=await loadPending(request,owner);
+        // Before invoking even the Site's trusted authorize URL builder, confirm
+        // the persisted session-bound record is for THIS owner and live flow.
+        // The relay separately revalidates this immediately before prepare.
+        if(!pending||pending.owner!==owner||pending.mode!=='live'||
+          !opaque(pending.browserId)||!opaque(pending.csrf)||
+          request.headers.get('x-oauth-csrf')!==pending.csrf||
+          !opaque(pending.state)||!opaque(pending.verifier)||
+          !Number.isSafeInteger(pending.expiresAt)||pending.expiresAt<=Date.now()&&!clock||
+          pending.redirectUri!==LIVE_CALLBACK_URL) throw new RelayError('authentication_required');
         const authLocation=await checkedAuthorizationUrl(
           await buildExistingAuthorizationUrl(request,pending),pending,oauthClientId);
         // Do not start browser OAuth if Worker registration/signing fails.
