@@ -7,15 +7,15 @@ import { isSafeBearerToken } from "./oauth-site-smoke-validation.mjs";
  * Never calls the PC-command tool "ping", or any GUI/file/task tool.
  * Opt-in with --live, after OAuth/Gateway deployment is approved separately.
  *
- * This validates the real HTTPS OAuth middleware and SITE tools/list/relay_ping
- * after production is configured. It is NOT a substitute for PC ping E2E.
+ * This validates the real HTTPS OAuth middleware and SITE gateway_probe only
+ * after a separately approved production rollout. It is NOT a PC command test.
  */
 
 const allowedMethods = new Set(["GET", "POST"]);
 const projectRef = "vtnwbgejlaqpnwmlzbjy";
 const endpoint =
   `https://${projectRef}.supabase.co/functions/v1/kaito-pc-agent-oauth-readonly`;
-const toolNames = Object.freeze(["gateway_probe", "relay_ping", "ping"]);
+const toolNames = Object.freeze(["gateway_probe"]);
 
 function fail(stage, reason) {
   throw new Error(`${stage}: ${reason}`);
@@ -102,18 +102,10 @@ async function main() {
   if (!actual || JSON.stringify(actual) !== JSON.stringify([...toolNames].sort())) {
     fail("tools_list", "tool_scope_mismatch");
   }
-  process.stdout.write("PASS tools_list: exactly three bootstrap tools\n");
+  process.stdout.write("PASS tools_list: only gateway_probe is advertised\n");
 
   expectScopedCapabilities(await callTool("gateway_probe", 102, token), "gateway_probe");
   process.stdout.write("PASS gateway_probe: authenticated Site client\n");
-
-  // relay_ping only reads paired-device metadata; no Windows command is queued.
-  const relay = await callTool("relay_ping", 103, token);
-  if (relay.success !== true || relay.message !== "relay_pong" ||
-      typeof relay.deviceRegistered !== "boolean") {
-    fail("relay_ping", "unexpected_relay_result");
-  }
-  process.stdout.write("PASS relay_ping: Gateway can read relay/device status\n");
 
   process.stdout.write("STOP: No PC ping, screenshot, GUI, task, or file action was sent.\n");
 }
