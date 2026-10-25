@@ -70,7 +70,8 @@ export function createSitesV10LiveCandidate({
       identity.owner!==owner||!opaque(identity.principalId)||!opaque(identity.browserId))
       throw new RelayError('authentication_required');
     const pending=await loadPending(request,owner);
-    if(!pending||pending.owner!==owner||pending.principalId!==identity.principalId||
+    if(!pending) throw new RelayError('state_unavailable');
+    if(pending.owner!==owner||pending.principalId!==identity.principalId||
       pending.browserId!==identity.browserId) throw new RelayError('authentication_required');
     return pending;
   }
