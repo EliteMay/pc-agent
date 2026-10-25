@@ -4,6 +4,7 @@
 // Do not expose this module, signing key, verifier or tokens to client bundles.
 import { createSitesRelayClient } from './sites-client.mjs';
 import { createVerifiedOAuthExchange } from './verified-oauth-exchange.mjs';
+import { createSupabaseAccessTokenVerifier } from './supabase-access-token-verifier.mjs';
 import {
   RelayError, SITE_ORIGIN, RELAY_PRODUCTION_ORIGIN, ISSUER, TTL,
   opaque, sha, safeHeaders, safeError,
@@ -50,7 +51,7 @@ function checkGetComplete(request) {
 export function createSitesV10LiveCandidate({
   enabled=false,origin=RELAY_PRODUCTION_ORIGIN,key,
   authorize,loadPending,verifyIdentityBinding,consumePending,invalidatePending,
-  exchangeAuthorizationCode,verifyAccessToken,storeVerifiedTokens,
+  exchangeAuthorizationCode,supabaseAuth,storeVerifiedTokens,
   ownerUserId,buildExistingAuthorizationUrl,
   oauthClientId,fetcher,clock,timeoutMs,
 }={}) {
@@ -62,6 +63,7 @@ export function createSitesV10LiveCandidate({
   if(typeof buildExistingAuthorizationUrl!=='function'||
     typeof authorize!=='function'||typeof loadPending!=='function'||
     typeof verifyIdentityBinding!=='function') throw new RelayError('setup_required');
+  const verifyAccessToken=createSupabaseAccessTokenVerifier(supabaseAuth);
   const exchangeOAuthCode=createVerifiedOAuthExchange({
     exchangeAuthorizationCode,verifyAccessToken,storeVerifiedTokens,
     ownerUserId,oauthClientId,...(clock?{clock}:{}),
