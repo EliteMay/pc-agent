@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   SITE_ALLOWED_TOOLS,
   clientCapabilities,
+  consistentJwtUserId,
   isToolAllowed,
   resolveClientPolicy,
   visibleTools,
@@ -42,6 +43,31 @@ test("Missing or tampered signed claims fail closed", () => {
   }
   // These fields are untrusted. Only ctx.jwtClaims.client_id is used.
   assert.equal(resolveClientPolicy({ headers: { "oai-authenticated-user-id": "owner" } }, config), "deny");
+});
+
+test("JWT user identity mismatch is denied even when owner email matches", () => {
+  const ownerId = "owner-user-id";
+  const email = "owner@example.invalid";
+  assert.equal(consistentJwtUserId({ id: ownerId, email }, { sub: ownerId }), ownerId);
+
+  for (const [userClaims, jwtClaims] of [
+    [{ id: "different-user-id", email }, { sub: ownerId }],
+    [{ id: ownerId, email }, { sub: "different-user-id" }],
+    [{ email }, { sub: ownerId }],
+    [{ id: ownerId, email }, {}],
+    [null, { sub: ownerId }],
+    [{ id: ownerId, email }, null],
+    [{ id: 123, email }, { sub: ownerId }],
+    [{ id: ownerId, email }, { sub: [ownerId] }],
+  ]) {
+    assert.equal(consistentJwtUserId(userClaims, jwtClaims), null);
+  }
+
+  // This helper is called before querying the owner allowlist in the Gateway.
+  const source = readFileSync(new URL("../gateway/oauth-pc-agent/index.ts", import.meta.url), "utf8");
+  const gate = source.slice(source.indexOf("async function isAllowedUser("));
+  assert.match(gate, /consistentJwtUserId\\(ctx\\?\\.userClaims, ctx\\?\\.jwtClaims\\)/);
+  assert.ok(gate.indexOf("consistentJwtUserId(") < gate.indexOf('.from("kaito_pc_relay_config")'));
 });
 
 test("Missing and malformed deployment config fails closed", () => {
