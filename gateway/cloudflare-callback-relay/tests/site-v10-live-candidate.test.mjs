@@ -22,7 +22,9 @@ function authUrl(pending,overrides={}) {
 async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=false}={}) {
   const f=await fixture({env:LIVE});
   const owner='offline-owner',browser=value(),csrf=value(),verifier=value();
-  let pending={mode:pendingMode,owner,browserId:browser,csrf,verifier,
+  const principalId=value();
+  let authenticatedPrincipal=principalId;
+  let pending={mode:pendingMode,owner,principalId,browserId:browser,csrf,verifier,
     challenge:await sha(verifier),state:f.state,
     expiresAt:epoch+300000,redirectUri:LIVE_CALLBACK_URL};
   const exchanges=[],calls=[];
@@ -30,6 +32,10 @@ async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=fals
   const loadPending=async(req,who)=>req.headers.get('cookie')===browser&&who===owner?pending:null;
   const candidate=createSitesV10LiveCandidate({
     enabled,origin:LIVE_ORIGIN,key:KEY,authorize,loadPending,
+    // The mock session verifier is independent of the request's user headers.
+    // A production verifier MUST validate the signed/encrypted Site session.
+    verifyIdentityBinding:async req=>req.headers.get('cookie')===browser?
+      {owner,principalId:authenticatedPrincipal,browserId:browser}:null,
     consumePending:async p=>{if(!pending||pending.state!==p.state)return false;pending=null;return true;},
     invalidatePending:async()=>{pending=null;},
     exchangeAndStoreExistingOAuth:async p=>{
@@ -43,7 +49,8 @@ async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=fals
   });
   const req=(path,method='POST',headers={})=>new Request(SITE+path,{method,
     headers:{origin:SITE,cookie:browser,'x-test-owner':owner,'x-oauth-csrf':csrf,...headers}});
-  return {f,candidate,req,calls,exchanges,pending:()=>pending,csrf,owner,browser};
+  return {f,candidate,req,calls,exchanges,pending:()=>pending,csrf,owner,browser,
+    changeAuthenticatedPrincipal:()=>{authenticatedPrincipal=value();}};
 }
 
 test('default OFF blocks every live handler before touching owner, pending, Worker or OAuth',async()=>{
@@ -133,6 +140,7 @@ test('an intervening pending rewrite cannot prepare a different state or PKCE se
     p=>{p.state=value();},
     p=>{p.verifier=value();},
     p=>{p.browserId=value();},
+    p=>{p.principalId=value();},
     p=>{p.csrf=value();},
     p=>{p.mode='dummy';},
     p=>{p.redirectUri=SITE+'/oauth/callback';},
@@ -144,6 +152,41 @@ test('an intervening pending rewrite cannot prepare a different state or PKCE se
     assert.equal(s.f.DB.rows('relay_pending').length,0);
     assert.equal(s.exchanges.length,0);
   }
+});
+
+test('live candidate refuses to initialize without independent server-side identity verification',async()=>{
+  assert.throws(()=>createSitesV10LiveCandidate({
+    enabled:true,origin:LIVE_ORIGIN,key:KEY,
+    authorize:async()=> 'offline-owner',loadPending:async()=>null,
+    consumePending:async()=>true,invalidatePending:async()=>{},
+    buildExistingAuthorizationUrl:async()=>'',
+    exchangeAndStoreExistingOAuth:async()=>{},
+  }),e=>e.code==='setup_required');
+});
+
+test('same owner email but changed authenticated principal is denied before any Relay network call',async()=>{
+  const s=await setup();
+  s.changeAuthenticatedPrincipal();
+  const r=await s.candidate.start(s.req('/oauth/start','POST',{
+    'oai-authenticated-user-email':s.owner,
+    'oai-authenticated-user-id':s.pending().principalId,
+  }));
+  assert.equal(r.status,401);
+  assert.equal(s.calls.length,0);
+  assert.equal(s.exchanges.length,0);
+  assert.equal(s.f.DB.rows('relay_pending').length,0);
+});
+
+test('principal switch between initial start and POST complete blocks OAuth claim and token exchange',async()=>{
+  const s=await setup();
+  assert.equal((await s.candidate.start(s.req('/oauth/start'))).status,303);
+  assert.equal((await s.f.callback('code='+CANARY+'&state='+s.f.state)).status,303);
+  const before=s.calls.length;
+  s.changeAuthenticatedPrincipal();
+  const completed=await s.candidate.postComplete(s.req('/connect/complete'));
+  assert.equal(completed.status,401);
+  assert.equal(s.calls.length,before);
+  assert.equal(s.exchanges.length,0);
 });
 
 test('dummy pending cannot be reused to start or finish a live OAuth exchange',async()=>{
