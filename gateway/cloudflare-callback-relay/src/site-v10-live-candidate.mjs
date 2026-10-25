@@ -48,7 +48,7 @@ function checkGetComplete(request) {
 // record with mode:'live', then invoke start. No synthetic dummy callbacks.
 export function createSitesV10LiveCandidate({
   enabled=false,origin=RELAY_PRODUCTION_ORIGIN,key,
-  authorize,loadPending,consumePending,invalidatePending,
+  authorize,loadPending,verifyIdentityBinding,consumePending,invalidatePending,
   exchangeAndStoreExistingOAuth,buildExistingAuthorizationUrl,
   oauthClientId,fetcher,clock,timeoutMs,
 }={}) {
@@ -58,9 +58,24 @@ export function createSitesV10LiveCandidate({
     return { start:unavailable, getComplete:unavailable, postComplete:unavailable };
   }
   if(typeof buildExistingAuthorizationUrl!=='function'||
-    typeof exchangeAndStoreExistingOAuth!=='function') throw new RelayError('setup_required');
+    typeof exchangeAndStoreExistingOAuth!=='function'||
+    typeof authorize!=='function'||typeof loadPending!=='function'||
+    typeof verifyIdentityBinding!=='function') throw new RelayError('setup_required');
+  // Must be validated by the Site's own server-side session machinery. This is
+  // not a claim from a browser header, JSON-RPC parameter or arbitrary cookie.
+  // If the Site does not provide an independent session-bound identity, stay OFF.
+  async function sessionBoundPending(request,owner) {
+    const identity=await verifyIdentityBinding(request);
+    if(!identity||typeof identity!=='object'||Array.isArray(identity)||
+      identity.owner!==owner||!opaque(identity.principalId)||!opaque(identity.browserId))
+      throw new RelayError('authentication_required');
+    const pending=await loadPending(request,owner);
+    if(!pending||pending.owner!==owner||pending.principalId!==identity.principalId||
+      pending.browserId!==identity.browserId) throw new RelayError('authentication_required');
+    return pending;
+  }
   const relay=createSitesRelayClient({
-    origin,key,mode:'live',liveEnabled:true,authorize,loadPending,
+    origin,key,mode:'live',liveEnabled:true,authorize,loadPending:sessionBoundPending,
     consumePending,invalidatePending,exchangeOAuthCode:exchangeAndStoreExistingOAuth,
     ...(fetcher?{fetcher}:{}),...(clock?{clock}:{}),
     ...(timeoutMs?{timeoutMs}:{}),
@@ -79,7 +94,7 @@ export function createSitesV10LiveCandidate({
 
         const owner=await authorize(request);
         if(typeof owner!=='string'||!owner||owner.length>200) throw new RelayError('authentication_required');
-        const pending=await loadPending(request,owner);
+        const pending=await sessionBoundPending(request,owner);
         const now=(typeof clock==='function'?clock:Date.now)();
         // Before invoking even the Site's trusted authorize URL builder, confirm
         // the persisted session-bound record is for THIS owner and live flow.
@@ -94,7 +109,8 @@ export function createSitesV10LiveCandidate({
         // and an overlapping browser tab must not substitute another pending
         // record before the relay's second session-bound read.
         const snapshot=Object.freeze({
-          owner:pending.owner,browserId:pending.browserId,mode:pending.mode,
+          owner:pending.owner,principalId:pending.principalId,
+          browserId:pending.browserId,mode:pending.mode,
           state:pending.state,verifier:pending.verifier,csrf:pending.csrf,
           expiresAt:pending.expiresAt,redirectUri:pending.redirectUri,
         });
