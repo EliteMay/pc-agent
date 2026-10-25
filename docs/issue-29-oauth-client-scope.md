@@ -9,7 +9,7 @@ The verified `ctx.jwtClaims.client_id` from `withSupabase({auth:"user"})` is use
 - `KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID`: the **one exact** OAuth client ID that Sites uses for the Supabase OAuth flow. **Do not guess this value.** Configure only after reading its registered client ID from the legitimate OAuth management interface.
 - `KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS`: optional comma-separated allowlist of **other** explicitly approved OAuth client IDs for the existing full Gateway capabilities. An empty string means no privileged clients. Never add the Site ID to this list.
 - If the Site ID setting is absent/malformed, the claim is absent/malformed, privileged IDs are malformed/duplicated, or the lists overlap, **all** OAuth clients are rejected (403). The code must **not** be deployed without evaluating this compatibility consequence first.
-- Site client is limited to `gateway_probe`, `relay_ping`, `ping`. The `tools/list` result is filtered AND `tools/call` enforces the same policy before task orchestration, PC queue, image, GUI, file access or development command branches.
+- **Current milestone**: Site client is limited to **`gateway_probe` only**. It cannot call `relay_ping` or queue even a read-only PC `ping`; it has no tool access to files, GUI, tasks or orchestration. Both `tools/list` and `tools/call` enforce the same policy before any device/queue dispatch.
 - Only explicitly allowlisted different OAuth clients retain full existing Gateway capabilities. Unknown/unregistered clients default to deny. The existing user UUID allowlist check remains required for everyone.
 - This is a Gateway defense-in-depth control: it **does not** establish the authenticity of Sites identity headers or browser/MCP same-user matching. A malicious actor with an actual allowlisted privileged client's valid bearer token remains subject to that token's capabilities, so protecting/token-revoking those tokens remains important.
 
@@ -46,7 +46,7 @@ The following observations were obtained via read-only Supabase auth catalog que
 - **Site client registration must be uniquely attributed**, using the official OAuth registration and Site's saved OAuth client configuration, not merely matching a redirect domain. Keep the actual ID out of the public repository, issue comments and logs.
 - **Do not automatically grant privileged capabilities to both existing public OAuth registrations.** First prove which (if any) belongs to the prior private Plugin, what operations must remain supported, and whether an actual valid token contains a matching `client_id`. An unidentified client stays denied.
 - **Do not deploy without configuring the exact approved identifiers.** With no `KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID`, all authenticated Gateway clients fail closed; this is a known potential legacy Plugin regression, not a rollout-ready release.
-- The Site client cap to `gateway_probe` / `relay_ping` / `ping` is **stage 1 only**. To meet Issue #29, the later capture/GUI phases require deliberately scoped escalation with separate local approvals and fresh security tests; simply removing this deny gate would undo the defense.
+- The Site client cap to **`gateway_probe` alone** is **stage 1 only**. To meet Issue #29, the later capture/GUI phases require deliberately scoped escalation with separate local approvals and fresh security tests; simply removing this deny gate would undo the defense.
 - The Cloudflare callback redirect is not in the observed OAuth registry. **Never** bypass the existing callback/log/Relay gate by silently switching to a direct Site callback.
 - The Sites header overwrite and browser/MCP owner identity are still unverified. `client_id` authorization is defense in depth, not proof of either.
 
@@ -135,11 +135,10 @@ A new scoped smoke script at `tests/oauth-site-live-smoke.mjs` performs **no net
 
 When explicitly enabled, the smoke script pins the exact existing Supabase Gateway host/path, disallows bearer-forwarding HTTP redirects, does not log raw responses, and performs only:
 1. Authenticated `GET` capability metadata (must be read-only and reject write/orchestration).
-2. `tools/list` (must contain **exactly** `gateway_probe`, `relay_ping`, `ping`).
-3. `tools/call` for `gateway_probe` (authenticated, scoped).
-4. `tools/call` for `relay_ping` (read-only paired-device metadata; **no PC command queued**).
+2. `tools/list` (must contain **exactly** `gateway_probe`).
+3. `tools/call` for `gateway_probe` (authenticated, scoped). No relay/device metadata or PC command.
 
-The smoke does **not** call PC `ping` or any screenshot/GUI/task/file operation, cannot establish the full Issue #29 E2E criterion, and does not run automatically using a secret. The CI runs only `node --check tests/oauth-site-live-smoke.mjs` and `node tests/oauth-site-live-smoke.mjs` **without** `--live` or any token.
+The smoke does **not** call `relay_ping`, PC `ping`, or any screenshot/GUI/task/file operation, cannot establish the full Issue #29 E2E criterion, and does not run automatically using a secret. The CI runs only `node --check tests/oauth-site-live-smoke.mjs` and `node tests/oauth-site-live-smoke.mjs` **without** `--live` or any token.
 
 **Current ChatGPT plugin read-only diagnostic attempt:** the connected Sites Plugin exposes a `relay_ping` tool but returned an error meaning connection state/execution result was not confirmed. No retry was issued; `ping` was not called. Read-only Supabase log aggregation found no matching OAuth Gateway function event during the narrow inspected window. Missing logs alone cannot prove the request did not arrive. Independent device heartbeat remained fresh. **No OAuth E2E success has been claimed.**
 
@@ -153,3 +152,14 @@ Code audit reproduced a concrete defect in the previously drafted opt-in OAuth s
 - Regression tests: normal JWT-looking token with `s` and `r` passes, whitespace (spaces, CR/LF, tabs, Unicode NBSP) and `Bearer ` prefixes are denied, missing/short/malformed values fail.
 - CI workflow also now runs the validation tests and triggers when only `tests/oauth-*.mjs` changes; previously the Gateway CI path filter did **not** include test-only edits.
 - **Only source tests / offline CI:** no token, live OAuth, relay, PC queue or PC command was executed. The Site secret/client-id equality, callback logging and legacy compatibility remain unverified. PR #47 is still Draft / BLOCK DEPLOY.
+
+## 2026-10-25: Stage-1 Site client narrowed to authenticated Gateway probe ONLY
+
+The user chose one bounded goal: prove a real authenticated `gateway_probe` through the current Site to Supabase Gateway before granting any Site bearer access to device-related tools. The previous draft PR #47 policy exposed `relay_ping` and `ping` to the Site OAuth client, although the Stage-1 Site saved-v13 candidate deliberately blocks MCP and all PC commands. That was unnecessary privilege for the first milestone.
+
+Source-only changes in this PR:
+- `gateway/oauth-pc-agent/client-policy.mjs`: `SITE_ALLOWED_TOOLS = ["gateway_probe"]`. A valid Site JWT authorizes **no device status, queue or PC commands**, even a ping. Other separately-approved privileged clients retain their existing allowlisted tool set. Unknown/malformed/overlapping client IDs still deny all tools. The owner UUID check stays unchanged.
+- `tests/oauth-client-policy.test.mjs`: assert `relay_ping` and PC `ping` are denied to the Site client, both in tools listing and direct tool policy.
+- `tests/oauth-site-live-smoke.mjs`: the opt-in, post-approval smoke now checks only GET read-only capabilities, the single-tool list, and authenticated `gateway_probe`. It will **never send a PC or relay ping**. `--live` and a separately approved rollout/token remain mandatory; CI runs only offline mode without bearer material.
+
+**No scope escalation or production rollout is authorized by this commit.** Stage-2 `relay_ping` and PC `ping` require a separately reviewed and approved change. The actual Site saved-v13 SDK and masked client ID are inaccessible from normal chat; no claim of successful real JWT verification or authenticated MCP calls is made. Legacy-plugin compatibility and exact client allowlists remain a deployment blocker. Production Sites v10, draft v13, Supabase Gateway v15, Cloudflare, DB, Secrets and local Agent are unchanged.
