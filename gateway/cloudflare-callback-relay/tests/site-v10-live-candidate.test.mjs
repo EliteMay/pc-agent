@@ -129,7 +129,7 @@ test('wrong redirect, OAuth client ID, state and PKCE challenge fail BEFORE any 
 test('dummy pending cannot be reused to start or finish a live OAuth exchange',async()=>{
   const s=await setup({pendingMode:'dummy'});
   const r=await s.candidate.start(s.req('/oauth/start'));
-  assert.equal(r.status,503);
+  assert.equal(r.status,401);
   assert.equal(s.calls.length,0);
   assert.equal(s.exchanges.length,0);
   const post=await s.candidate.postComplete(s.req('/connect/complete'));
