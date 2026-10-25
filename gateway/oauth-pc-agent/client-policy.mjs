@@ -1,9 +1,10 @@
 // Restrict each OAuth client using only claims verified by @supabase/server.
 // Never derive the client identity from HTTP headers, JSON-RPC arguments or Site cookies.
+// Milestone 1: the Site OAuth bearer may only prove authenticated Gateway
+// reachability. It must not enqueue ANY Windows command, even a read-only ping.
+// Revisit additional Site tools only after an explicitly approved next stage.
 export const SITE_ALLOWED_TOOLS = Object.freeze([
   "gateway_probe",
-  "relay_ping",
-  "ping",
 ]);
 
 const SITE_TOOL_NAMES = new Set(SITE_ALLOWED_TOOLS);
