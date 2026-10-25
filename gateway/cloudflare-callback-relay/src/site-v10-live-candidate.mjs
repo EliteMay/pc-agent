@@ -3,6 +3,7 @@
 // encrypted pending store and confidential PKCE token-exchange implementation.
 // Do not expose this module, signing key, verifier or tokens to client bundles.
 import { createSitesRelayClient } from './sites-client.mjs';
+import { createVerifiedOAuthExchange } from './verified-oauth-exchange.mjs';
 import {
   RelayError, SITE_ORIGIN, RELAY_PRODUCTION_ORIGIN, ISSUER, TTL,
   opaque, sha, safeHeaders, safeError,
@@ -49,7 +50,8 @@ function checkGetComplete(request) {
 export function createSitesV10LiveCandidate({
   enabled=false,origin=RELAY_PRODUCTION_ORIGIN,key,
   authorize,loadPending,verifyIdentityBinding,consumePending,invalidatePending,
-  exchangeAndStoreExistingOAuth,buildExistingAuthorizationUrl,
+  exchangeAuthorizationCode,verifyAccessToken,storeVerifiedTokens,
+  ownerUserId,buildExistingAuthorizationUrl,
   oauthClientId,fetcher,clock,timeoutMs,
 }={}) {
   // Disabled by default. Do not even instantiate an OAuth transport.
@@ -58,9 +60,12 @@ export function createSitesV10LiveCandidate({
     return { start:unavailable, getComplete:unavailable, postComplete:unavailable };
   }
   if(typeof buildExistingAuthorizationUrl!=='function'||
-    typeof exchangeAndStoreExistingOAuth!=='function'||
     typeof authorize!=='function'||typeof loadPending!=='function'||
     typeof verifyIdentityBinding!=='function') throw new RelayError('setup_required');
+  const exchangeOAuthCode=createVerifiedOAuthExchange({
+    exchangeAuthorizationCode,verifyAccessToken,storeVerifiedTokens,
+    ownerUserId,oauthClientId,...(clock?{clock}:{}),
+  });
   // Must be validated by the Site's own server-side session machinery. This is
   // not a claim from a browser header, JSON-RPC parameter or arbitrary cookie.
   // If the Site does not provide an independent session-bound identity, stay OFF.
@@ -77,7 +82,7 @@ export function createSitesV10LiveCandidate({
   }
   const relay=createSitesRelayClient({
     origin,key,mode:'live',liveEnabled:true,authorize,loadPending:sessionBoundPending,
-    consumePending,invalidatePending,exchangeOAuthCode:exchangeAndStoreExistingOAuth,
+    consumePending,invalidatePending,exchangeOAuthCode,
     ...(fetcher?{fetcher}:{}),...(clock?{clock}:{}),
     ...(timeoutMs?{timeoutMs}:{}),
   });
