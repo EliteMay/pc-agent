@@ -60,10 +60,18 @@ export function createSitesRelayClient({origin,key,authorize,loadPending,consume
     return {pending,binding:await sha(`kaito-sites-binding|${owner}|${pending.browserId}|${pending.state}`)};
   }
   return {
-    async prepare(request) {
+    async prepare(request,expectedPending=null) {
       try {
         const {pending,binding}=await pendingFor(request,'prepare');
         if(!opaque(pending.csrf)||request.headers.get('x-oauth-csrf')!==pending.csrf) throw new RelayError('authentication_required');
+        // Server-only compare-and-prepare contract. The authorization URL may
+        // have been built from a prior pending read; never prepare a different
+        // state, verifier or browser binding after an intervening session write.
+        if(expectedPending!==null) {
+          const keys=['owner','browserId','state','verifier','csrf','expiresAt','redirectUri'];
+          if(!plainObject(expectedPending)||keys.some(key=>pending[key]!==expectedPending[key])||
+            pending.mode!==expectedPending.mode) throw new RelayError('state_unavailable');
+        }
         const result=await rpc('/prepare',{state:pending.state,binding},201);
         if(!plainObject(result)||Object.keys(result).sort().join(',')!=='mode,prepared'||result.prepared!==true||result.mode!==mode) throw new RelayError('unavailable');
         return safeJson({prepared:true,mode},201);
