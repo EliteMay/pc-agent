@@ -68,7 +68,7 @@ export function createSitesRelayClient({origin,key,authorize,loadPending,consume
         // have been built from a prior pending read; never prepare a different
         // state, verifier or browser binding after an intervening session write.
         if(expectedPending!==null) {
-          const keys=['owner','browserId','state','verifier','csrf','expiresAt','redirectUri'];
+          const keys=['owner','principalId','browserId','state','verifier','csrf','expiresAt','redirectUri'];
           if(!plainObject(expectedPending)||keys.some(key=>pending[key]!==expectedPending[key])||
             pending.mode!==expectedPending.mode) throw new RelayError('state_unavailable');
         }
