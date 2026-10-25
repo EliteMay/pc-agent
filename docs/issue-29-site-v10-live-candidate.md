@@ -14,9 +14,9 @@
 
 | 注入引数 | 既存Sites側で使う正規処理 | 必須契約 |
 | --- | --- | --- |
-| `authorize(request)` | 正式な本人セッション/所有者チェック | メール文字列だけでは高権限を与えない。Site固有の本人ヘッダー真正性は未証明 |
-| `verifyIdentityBinding(request)` | **新規の必須サーバー限定アダプター**。本人セッションを独立に検証する | `{owner, principalId, browserId}` を返す。`principalId` / `browserId`は43文字の不透明値で、暗号化pendingの値と両方一致必須。HTTPヘッダー・JSON-RPC・ブラウザから受けた任意IDを検証結果とみなさない。実Sitesの正式な信頼可能識別子取得方法が不明ならOFF維持 |
-| `loadPending(request,owner)` | HttpOnly Cookie＋ownerで暗号化pendingを復号してロード | `mode:'live'`、`owner`、**`principalId`**、`browserId`、`state`、`verifier`、`csrf`、`expiresAt`、固定`redirectUri`を返す。既存の保存版11の実スキーマは未確認 |
+| `authorize(request)` | **OAuth前に発行した本人未確定の短命ブラウザーセッション**の検証 | 戻り値は43文字の不透明なランダム`scopeId`で、所有者UUID・メールではない。CookieはSiteサーバー側で署名/暗号化検証し、発行・期限・失効を確認する。OAuth開始権だけでPC操作権はない |
+| `verifyIdentityBinding(request)` | **OAuth前セッションの本人未確定Binding**。`createPreOAuthBrowserBindings`が`authorize`とセットで提供可能 | `{owner:scopeId, principalId:sessionNonce, browserId}`。`principalId`は旧候補と互換のフィールド名だが**本人のユーザーIDではない**。暗号化pendingと3値を照合し、署名/暗号化済みCookieとサーバー側Sessionから再検証。偽装ヘッダー・ブラウザ申告IDを利用しない |
+| `loadPending(request,owner)` | 検証済みHttpOnly Cookieとサーバー側`scopeId`で暗号化pendingを復号してロード | `mode:'live'`、`owner:scopeId`、`principalId:sessionNonce`、`browserId`、`state`、`verifier`、`csrf`、`expiresAt`、固定`redirectUri`。メールや本人UUIDでセッション検索しない。保存版12の正式スキーマは未確認 |
 | `consumePending(pending)` | 既存のDB単回消費 | 並行POSTでも1回だけtrue、値をブラウザに返さない |
 | `invalidatePending(pending)` | 既存の失敗時無効化 | 再送で再利用できない |
 | `buildExistingAuthorizationUrl(request,pending)` | 既存PKCE S256/機密clientによる認可URL生成 | `state`、`client_id`、`redirect_uri`、実verifierのSHA256 challenge一致を検証後にのみ利用 |
@@ -29,7 +29,7 @@
 
 ### ルートの組み込み順
 
-1. 保存版10の既存直接OAuth開始処理のうち、**認証済みの本人ブラウザーにmode='live'のpendingを暗号化保存する部分のみを再利用**する。dummy codeは生成しない。既存の直接OAuth callbackやトークン暗号化処理を破棄しない。
+1. 保存版12の実ソースと現在のCookie/session/pending保存の契約をまず確認する。本人確定前でも**サーバーが発行・署名/暗号化検証できる短命HttpOnlyブラウザーセッション**へ`mode='live'`のpendingを暗号化保存できる場合に限り、`scopeId`をpending.owner、`sessionNonce`をpending.principalIdとして使用する。`createPreOAuthBrowserBindings`はこの検証結果を既存live候補へ渡す。既存の直接OAuth callbackやトークン暗号化処理は破棄しない。
 2. 同じ信頼済みrequestで候補`start(POST /oauth/start)`を呼ぶ。候補は既存pendingのowner/CSRF/有効期限と認可URLの`state`、`code_challenge_method=S256`、実verifierのSHA256、`client_id`、固定Worker`redirect_uri`を照合する。その後、署名付きWorker`/prepare`が201を返す場合だけSupabase OAuth認可URLへ303。
 3. 認可成功/拒否時にSupabaseからWorker`GET /oauth/callback`へ来るcode/stateは**Workerだけ**で受ける。Workerが暗号化pending保存し、query無し303でSites`GET /connect/complete`に戻る。Sites GETは候補`getComplete()`でホームへ303するだけでconsume/claimしない。ブラウザーに再認可codeを載せない。
 4. 既存の本人限定UIからCSRF付き`POST /connect/complete`で候補`postComplete()`を呼ぶ。候補内の既存`createSitesRelayClient`は単回consume、署名付きclaim、サーバー側の`exchangeAuthorizationCode` → `verifyAccessToken` → 所有者UUID・`client_id`照合 → `storeVerifiedTokens`を順番に実行する。成功レスポンスは`{state:'checking', mode:'live', gateway_authenticated:false}`なので、**UIは認証済みと表示せずGatewayの別途確認を要求**する。dummy`checking`表示との互換に注意。
@@ -121,3 +121,19 @@ PR #42のライブ候補のみ、`verifyIdentityBinding(request)`を必須にし
 - **実Siteへ導入する条件**: 未公開保存版12の正式ソースと現存依存を確認し、その既存Supabaseクライアントが**正しいAuth URLで構成され、Secret/Tokenがserver-only**であること、コード交換と暗号化保管を分離できること、受け取ったOAuth tokenの `client_id` と本人UUIDが期待どおりであることを安全な検証経路で確認する。公式のサイト本人プリンシパル検証機構は別途未解決。Cookie/CSRF/PKCE/並行実行/PR #47の最終権限境界を飛ばさない。
 
 このPRは未公開Source候補のみ。本番Sites保存版10と未公開保存版12、本番Supabase Gateway、Worker、Secrets、DB、PCには手を加えていない。
+
+## 2026-10-25: OAuth開始前のセッションBindingと本人UUIDの区別（未公開のみ）
+
+**原因分析:** 先行候補の`verifyIdentityBinding`にOAuth開始前から「所有者本人の検証済みprincipal ID」を要求すると、本人確認の手段が同じOAuthしかない環境では**循環依存**になり、ログイン自体を開始できない。ChatGPT Sitesの[公開仕様](https://learn.chatgpt.com/docs/sites/data-and-connections)は本人メールヘッダーを記載する一方、ブラウザー/MCP共通の強い署名済みIDやヘッダー真正性を保証していない。本番でメール一致だけを所有者判定に使わない。
+
+**安全な二段階の役割:**
+
+- **認証前:** `src/pre-oauth-browser-session.mjs`の`createPreOAuthBrowserBindings({readVerifiedBrowserSession,clock})`を提供。既存Siteのサーバー側で**本当に検証された**短命・失効可能なHttpOnly CookieとSession Storeから、ランダム43文字の`scopeId`、`sessionNonce`、`browserId`、短命expiresAtを取得。`scopeId`は`pending.owner`に入る互換セッション検索キーで、ユーザーUUIDでもメールでもない。`sessionNonce`は候補の既存フィールド名`principalId`に入るが、**人物IDではなくブラウザーセッションBinding**。この段階で許可されるのは、CSRF/Origin/PKCE/state/S256/単回消費に保護された**OAuth開始・受渡しだけ**。別途レート制限も保持。
+- **認証後:** `getClaims(accessToken)`で実Supabase AuthがJWT署名・期限等を検証し、**実所有者UUID=JWT sub、実Client ID=JWT client_id**と一致するときだけ既存暗号化Token Storeに保存。認証失敗や匿名/別主体では保存0、Gateway/PC操作権0。
+- **MCP:** ブラウザーがこのセッションを保有しているだけではMCPクライアントの本人同一性は未証明。MCPはPR #47の**検証済みSupabase Bearerを使用した別のGateway認可**を要求し、ブラウザー用Cookie、メールヘッダー、pendingの`scopeId`/ `principalId`を権限証明として使わない。
+
+**未公開候補実装:** `createSitesV10LiveCandidate`は`authorize`の返値をランダム43文字に限定し、メール形式のownerをRelay連絡前に拒否する。既存のPending再読込・CSRF・一回限り交換・トークン照合は維持。8件の新規テストで、本人ヘッダー偽装、Cookie不一致、期限切れ・失効、セッション回転、認証前にメール不要でOAuth開始できるmock成功、検証JWTが別ユーザーなら保存0などを確認する。
+
+**非常に重要な制約:** このアダプター自体は暗号化Cookieの検証器を実装しない。`readVerifiedBrowserSession`が本当にSiteの正規サーバーセッションを検証し、ユーザー送信値やヘッダーを信用しないことを**保存版12正式ソースで実証する必要がある**。該当経路が存在しないなら、このオフラインmockの成功を根拠に新しいログインを本番で有効化してはならない。現時点でSites未公開保存版12の実ソースにアクセスできないため、GitHub開発候補にのみ保存。保存版12自体は一切変更していない。
+
+**未解決ブロッカー:** pre-auth Cookie発行・サーバー照合の実装可能性、Site SDK及びHosted Secret実確認、SupabaseのクライアントID一致、Worker callback登録・ログ保護、旧Pluginとの競合、PR #47本番適用、実ブラウザー/MCP本人区別。OAuth/Relay OFF、本番Deployなし、PCコマンドなし。
