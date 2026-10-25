@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { pipeline } from "npm:@supabase/middleware@^0.5.0";
 import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^1.6.0";
-import { clientCapabilities, isToolAllowed, resolveClientPolicy, visibleTools } from "./client-policy.mjs";
+import { clientCapabilities, consistentJwtUserId, isToolAllowed, resolveClientPolicy, visibleTools } from "./client-policy.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
@@ -412,7 +412,7 @@ function mcpError(id: unknown, code: number, message: string) {
 }
 
 async function isAllowedUser(ctx: any) {
-  const userId = ctx?.userClaims?.id;
+  const userId = consistentJwtUserId(ctx?.userClaims, ctx?.jwtClaims);
   if (!userId) return false;
 
   const { data, error } = await ctx.supabaseAdmin
