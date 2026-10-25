@@ -9,6 +9,8 @@ import { ISSUER, sha } from '../src/protocol.mjs';
 const CLIENT='offline-confidential-client';
 const LIVE={RELAY_MODE:'live',RELAY_LIVE_ENABLED:'true',RELAY_ORIGIN:LIVE_ORIGIN};
 const CANARY='offline-live-code-canary';
+const OWNER_UUID='11111111-1111-4111-8111-111111111111';
+const OTHER_UUID='22222222-2222-4222-8222-222222222222';
 function authUrl(pending,overrides={}) {
   const url=new URL(ISSUER+'/oauth/authorize');
   for(const [k,v] of Object.entries({
@@ -19,7 +21,8 @@ function authUrl(pending,overrides={}) {
   return url.href;
 }
 
-async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=false}={}) {
+async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=false,
+  verifiedOverrides={},verifyFailure=false,invalidTokenResponse=false,storeFailure=false}={}) {
   const f=await fixture({env:LIVE});
   const owner='offline-owner',browser=value(),csrf=value(),verifier=value();
   const principalId=value();
@@ -27,7 +30,7 @@ async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=fals
   let pending={mode:pendingMode,owner,principalId,browserId:browser,csrf,verifier,
     challenge:await sha(verifier),state:f.state,
     expiresAt:epoch+300000,redirectUri:LIVE_CALLBACK_URL};
-  const exchanges=[],calls=[];
+  const exchanges=[],calls=[],verifications=[],stored=[];
   const authorize=async req=>req.headers.get('x-test-owner')===owner?owner:null;
   const loadPending=async(req,who)=>req.headers.get('cookie')===browser&&who===owner?pending:null;
   const candidate=createSitesV10LiveCandidate({
@@ -38,18 +41,32 @@ async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=fals
       {owner,principalId:authenticatedPrincipal,browserId:browser}:null,
     consumePending:async p=>{if(!pending||pending.state!==p.state)return false;pending=null;return true;},
     invalidatePending:async()=>{pending=null;},
-    exchangeAndStoreExistingOAuth:async p=>{
+    exchangeAuthorizationCode:async p=>{
       exchanges.push(p);
       if(failExchange)throw Error('private-token-exchange-failure');
-      return {access_token:'invisible-token',refresh_token:'invisible-refresh'};
+      if(invalidTokenResponse) return {token_type:'none',access_token:'bad token'};
+      return {access_token:'invisible-token',refresh_token:'invisible-refresh',token_type:'Bearer'};
     },
+    verifyAccessToken:async token=>{
+      verifications.push(token);
+      if(verifyFailure)throw Error('private-verifier-failure');
+      return {sub:OWNER_UUID,user_id:OWNER_UUID,client_id:CLIENT,role:'authenticated',
+        aud:'authenticated',iss:ISSUER,iat:Math.floor(epoch/1000)-100,
+        exp:Math.floor(epoch/1000)+3600,...verifiedOverrides};
+    },
+    storeVerifiedTokens:async v=>{
+      stored.push(v);
+      if(storeFailure)throw Error('private-store-failure');
+    },
+    ownerUserId:OWNER_UUID,
     buildExistingAuthorizationUrl:async(_request,p)=>alterUrl?alterUrl(authUrl(p),p):authUrl(p),
     oauthClientId:CLIENT,clock:()=>epoch,timeoutMs:1000,
     fetcher:async req=>{calls.push(req.url);return f.worker.fetch(req,f.env);},
   });
   const req=(path,method='POST',headers={})=>new Request(SITE+path,{method,
     headers:{origin:SITE,cookie:browser,'x-test-owner':owner,'x-oauth-csrf':csrf,...headers}});
-  return {f,candidate,req,calls,exchanges,pending:()=>pending,csrf,owner,browser,
+  return {f,candidate,req,calls,exchanges,verifications,stored,
+    pending:()=>pending,csrf,owner,browser,
     changeAuthenticatedPrincipal:()=>{authenticatedPrincipal=value();}};
 }
 
@@ -101,6 +118,10 @@ test('live start validates existing PKCE, redirects only after a signed prepare,
   const body=await finish.text();
   assert.deepEqual(JSON.parse(body),{state:'checking',mode:'live',gateway_authenticated:false});
   assert.equal(s.exchanges.length,1);
+  assert.equal(s.verifications.length,1);
+  assert.equal(s.stored.length,1);
+  assert.equal(s.stored[0].ownerUserId,OWNER_UUID);
+  assert.equal(s.stored[0].oauthClientId,CLIENT);
   assert.deepEqual(s.exchanges[0],{
     code:CANARY,state:s.f.state,code_verifier:s.exchanges[0].code_verifier,
     redirect_uri:LIVE_CALLBACK_URL,
@@ -108,6 +129,7 @@ test('live start validates existing PKCE, redirects only after a signed prepare,
   assert.ok(!body.includes(CANARY));
   assert.ok(!body.includes('invisible-token'));
   assert.ok(!body.includes('invisible-refresh'));
+  assert.ok(!body.includes(OWNER_UUID));
   assert.equal(s.pending(),null);
   assert.equal(s.f.DB.rows('relay_pending')[0].envelope,null);
   assert.equal((await s.candidate.postComplete(s.req('/connect/complete'))).status,409);
@@ -160,7 +182,9 @@ test('live candidate refuses to initialize without independent server-side ident
     authorize:async()=> 'offline-owner',loadPending:async()=>null,
     consumePending:async()=>true,invalidatePending:async()=>{},
     buildExistingAuthorizationUrl:async()=>'',
-    exchangeAndStoreExistingOAuth:async()=>{},
+    exchangeAuthorizationCode:async()=>({}),
+    verifyAccessToken:async()=>({}),storeVerifiedTokens:async()=>{},
+    ownerUserId:OWNER_UUID,oauthClientId:CLIENT,
   }),e=>e.code==='setup_required');
 });
 
@@ -232,6 +256,63 @@ test('existing encrypted-token exchange failure is sanitized and cannot be retri
   assert.equal(s.exchanges.length,1);
   assert.equal(s.pending(),null);
   assert.equal(s.f.DB.rows('relay_pending')[0].envelope,null);
+  assert.notEqual((await s.candidate.postComplete(s.req('/connect/complete'))).status,200);
+});
+
+test('verified OAuth user/client claim mismatch denies storage even with same email header',async()=>{
+  for(const verifiedOverrides of [
+    {sub:OTHER_UUID,user_id:OTHER_UUID,email:'offline-owner'},
+    {client_id:'attacker-oauth-client'},
+    {sub:undefined},
+    {user_id:OTHER_UUID},
+    {iss:'https://attacker.invalid/auth/v1'},
+    {aud:'other'},
+    {role:'anon'},
+    {is_anonymous:true},
+    {exp:Math.floor(epoch/1000)-1},
+    {iat:Math.floor(epoch/1000)+180},
+    {nbf:Math.floor(epoch/1000)+180},
+  ]) {
+    const s=await setup({verifiedOverrides});
+    assert.equal((await s.candidate.start(s.req('/oauth/start'))).status,303);
+    assert.equal((await s.f.callback('code='+CANARY+'&state='+s.f.state)).status,303);
+    const response=await s.candidate.postComplete(s.req('/connect/complete','POST',{
+      'oai-authenticated-user-email':'offline-owner',
+      'oai-authenticated-user-id':OWNER_UUID,
+    }));
+    assert.equal(response.status,401);
+    assert.equal(s.verifications.length,1);
+    assert.equal(s.stored.length,0);
+    assert.equal(s.pending(),null);
+    assert.notEqual((await s.candidate.postComplete(s.req('/connect/complete'))).status,200);
+  }
+});
+
+test('verification and token-shape failures cannot store credentials or disclose private data',async()=>{
+  for(const scenario of [{verifyFailure:true},{invalidTokenResponse:true}]){
+    const s=await setup(scenario);
+    assert.equal((await s.candidate.start(s.req('/oauth/start'))).status,303);
+    assert.equal((await s.f.callback('code='+CANARY+'&state='+s.f.state)).status,303);
+    const response=await s.candidate.postComplete(s.req('/connect/complete'));
+    assert.equal(response.status,503);
+    const body=await response.text();
+    assert.ok(!body.includes('private-verifier-failure'));
+    assert.ok(!body.includes('invisible-token'));
+    assert.equal(s.stored.length,0);
+    assert.equal(s.pending(),null);
+  }
+});
+
+test('verified token-store failure remains sanitized and cannot repeat OAuth exchange',async()=>{
+  const s=await setup({storeFailure:true});
+  assert.equal((await s.candidate.start(s.req('/oauth/start'))).status,303);
+  assert.equal((await s.f.callback('code='+CANARY+'&state='+s.f.state)).status,303);
+  const r=await s.candidate.postComplete(s.req('/connect/complete'));
+  assert.equal(r.status,503);
+  assert.ok(!(await r.text()).includes('private-store-failure'));
+  assert.equal(s.exchanges.length,1);
+  assert.equal(s.stored.length,1);
+  assert.equal(s.pending(),null);
   assert.notEqual((await s.candidate.postComplete(s.req('/connect/complete'))).status,200);
 });
 
