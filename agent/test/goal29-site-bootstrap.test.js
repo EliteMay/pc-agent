@@ -12,7 +12,7 @@ import {
 
 // Entirely offline: no Supabase/Cloudflare/Sites requests and no Windows calls.
 // This checks the shared bootstrap contract, NOT a live ChatGPT -> Agent E2E.
-const config = { siteClientId: "test-sites-client", privilegedClientIds: "" };
+const config = { siteClientId: "test-sites-client", privilegedClientIds: "test-privileged-client" };
 
 function fakeEnvelope(tool, id) {
   return {
@@ -51,8 +51,15 @@ async function simulatedBootstrapCall(claims, toolName) {
   }
 }
 
-test("Site-scoped signed client can complete mock ping through real Agent queue runner", async () => {
+test("Site-scoped bearer cannot enqueue even a mock read-only ping", async () => {
   const reply = await simulatedBootstrapCall({ client_id: config.siteClientId }, "ping");
+  assert.equal(reply.denied, true);
+  assert.deepEqual(reply.queued, []);
+  assert.deepEqual(reply.delivered, []);
+});
+
+test("Explicitly privileged OAuth client can complete mock ping through real Agent queue runner", async () => {
+  const reply = await simulatedBootstrapCall({ client_id: "test-privileged-client" }, "ping");
   assert.equal(reply.denied, false);
   assert.equal(reply.result.status, "SUCCEEDED");
   assert.equal(reply.result.result.message, "pong");
@@ -64,7 +71,7 @@ test("Site-scoped signed client can complete mock ping through real Agent queue 
 
 test("Unauthorized Site tools are rejected before a mock command is enqueued", async () => {
   for (const tool of [
-    "capture_notepad", "notepad_gui", "read_text_file",
+    "relay_ping", "ping", "capture_notepad", "notepad_gui", "read_text_file",
     "write_text_file", "run_development_command", "task_step",
   ]) {
     const reply = await simulatedBootstrapCall({ client_id: config.siteClientId }, tool);
@@ -89,6 +96,6 @@ test("Bootstrap Site tool list matches the exact allowed contract", () => {
   const tools = ["gateway_probe", "relay_ping", "ping", "capture_notepad", "notepad_gui", "task_step"]
     .map((name) => ({ name }));
   assert.deepEqual(visibleTools(tools, policy).map((tool) => tool.name), [
-    "gateway_probe", "relay_ping", "ping",
+    "gateway_probe",
   ]);
 });
