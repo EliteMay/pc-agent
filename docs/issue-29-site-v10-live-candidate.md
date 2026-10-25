@@ -20,7 +20,10 @@
 | `consumePending(pending)` | 既存のDB単回消費 | 並行POSTでも1回だけtrue、値をブラウザに返さない |
 | `invalidatePending(pending)` | 既存の失敗時無効化 | 再送で再利用できない |
 | `buildExistingAuthorizationUrl(request,pending)` | 既存PKCE S256/機密clientによる認可URL生成 | `state`、`client_id`、`redirect_uri`、実verifierのSHA256 challenge一致を検証後にのみ利用 |
-| `exchangeAndStoreExistingOAuth({code,state,code_verifier,redirect_uri})` | 既存Supabase Token endpointへのサーバー交換と暗号化保存 | 既存confidential client secretをサーバー内に保ち、tokensやcodeをUI/ログに出さない |
+| `exchangeAuthorizationCode(params)` | 既存confidential OAuth clientを使った**サーバー内のコード交換のみ** | この関数内ではトークンをDB/Cookieへ保存しない。code/secretはログ/UIに出さない |
+| `verifyAccessToken(accessToken)` | **実Supabase Auth / JWKSを使ったJWTの署名・issuer・audience・期限検証** | 単なるJWTデコードや検証済みという自己申告オブジェクトは不可。検証済みclaimsを返し、失敗時は拒否 |
+| `storeVerifiedTokens({tokens,ownerUserId,oauthClientId})` | 既存の暗号化トークン保管 | **認証済みclaimsの照合成功後のみ呼ばれる**。対象ownerレコードへの原子的な永続化と、部分失敗時の無効化を正式ソースで実証 |
+| `ownerUserId` | 既存のサーバー専用・承認済み所有者UUID | ブラウザ送信値やメールアドレスから導出しない。検証済みJWTの`sub`と完全一致を要求 |
 | `oauthClientId` / `key` | 既存のHosted Secret（server-only） | 実値はGitHub/チャット/Browserへ表示しない。Supabase登録との非公開等値照合が必要 |
 | `enabled` | 信頼済みサーバー側feature gate | **デフォルトfalse**。ブラウザ/MCP要求でONにできない。Work未公開候補でもOFF保持 |
 
@@ -29,7 +32,7 @@
 1. 保存版10の既存直接OAuth開始処理のうち、**認証済みの本人ブラウザーにmode='live'のpendingを暗号化保存する部分のみを再利用**する。dummy codeは生成しない。既存の直接OAuth callbackやトークン暗号化処理を破棄しない。
 2. 同じ信頼済みrequestで候補`start(POST /oauth/start)`を呼ぶ。候補は既存pendingのowner/CSRF/有効期限と認可URLの`state`、`code_challenge_method=S256`、実verifierのSHA256、`client_id`、固定Worker`redirect_uri`を照合する。その後、署名付きWorker`/prepare`が201を返す場合だけSupabase OAuth認可URLへ303。
 3. 認可成功/拒否時にSupabaseからWorker`GET /oauth/callback`へ来るcode/stateは**Workerだけ**で受ける。Workerが暗号化pending保存し、query無し303でSites`GET /connect/complete`に戻る。Sites GETは候補`getComplete()`でホームへ303するだけでconsume/claimしない。ブラウザーに再認可codeを載せない。
-4. 既存の本人限定UIからCSRF付き`POST /connect/complete`で候補`postComplete()`を呼ぶ。候補内の既存`createSitesRelayClient`は単回consume、署名付きclaim、既存`exchangeAndStoreExistingOAuth`を実行する。成功レスポンスは`{state:'checking', mode:'live', gateway_authenticated:false}`なので、**UIは認証済みと表示せずGatewayの別途確認を要求**する。dummy`checking`表示との互換に注意。
+4. 既存の本人限定UIからCSRF付き`POST /connect/complete`で候補`postComplete()`を呼ぶ。候補内の既存`createSitesRelayClient`は単回consume、署名付きclaim、サーバー側の`exchangeAuthorizationCode` → `verifyAccessToken` → 所有者UUID・`client_id`照合 → `storeVerifiedTokens`を順番に実行する。成功レスポンスは`{state:'checking', mode:'live', gateway_authenticated:false}`なので、**UIは認証済みと表示せずGatewayの別途確認を要求**する。dummy`checking`表示との互換に注意。
 5. 既存`gateway_probe`はOFF状態で固定診断のまま。Gateway呼び出し可能にすることと、実OAuth pending/codeの受渡しは別のrelease step。Site本人/MCPヘッダー真正性とPR #47のverified `client_id`は別ゲートとして維持する。
 
 ## 今回の開発ブランチで証明できること／できないこと
@@ -93,3 +96,17 @@ PR #42のライブ候補のみ、`verifyIdentityBinding(request)`を必須にし
 **本変更はGitHub設計メモのみ**。未公開Sitesの書換え、Cloudflare/Supabase/Secret/DB/PCの変更、OAuthの実認証・有効化、JWTを伴う実E2Eは行わない。
 
 **回帰テストの必須観点:** 同メール・別主体、偽装ヘッダー、別Supabase user `sub`、別 `client_id`、期限切れ/改ざんJWT、本人変更途中のpending、別ブラウザCookie、MCPとブラウザのSession非共有、同時callback/二重claim、ログへのcode/token混入、旧Client影響、直接MCP `tools/call`での拒否。外部署名やHostedプロキシ保証をモックだけで「実証」としない。
+
+## 2026-10-25: コード交換後の検証を永続化の必須前提にする（未公開PR #42のみ）
+
+`src/verified-oauth-exchange.mjs`を追加し、`site-v10-live-candidate.mjs`のlive token handoffを3段階（exchange / verify / store）に変更。`exchangeAndStoreExistingOAuth`という従来の一体callbackは受け入れない。トークンがOAuth endpointから返ったことだけを成功条件にせず、
+
+- **正式な外部署名検証:** サーバー専用`verifyAccessToken` callbackがSupabase Auth/JWKS等の正式な手段でaccess token署名、issuer、audience、期限を検証。新しいmoduleはJWTを復号・署名検証するものではなく、**既に検証されたclaimsの一致ポリシーだけ**を持つ。
+- **権限Binding:** `sub`が設定済みowner UUID、`client_id`がサーバー側OAuth client ID、`iss`が対象Supabase Auth、`aud=authenticated`、`role=authenticated`であることを要求。期限切れ、未来`iat/nbf`、匿名ユーザー、矛盾する`user_id`は拒否。
+- **暗号化保存の後置:** 検証・照合が通るまで `storeVerifiedTokens` を**一切呼ばない**。返却はブラウザに`checking`のみ。Siteの既存暗号化Store/Rollback APIの実装は別途必要。
+
+**テスト:** [PR #42](https://github.com/EliteMay/pc-agent/pull/42)のCallback relay dummy CIは99/99 PASS。追加テストで別ユーザー／別client／issuer不一致／期限切れ等11種類で保存0、検証例外・不正トークン応答で保存0、Store例外で単回consumptionと安全なエラーを確認。ただしこのテストの`verifyAccessToken`は**テスト専用mock**であり実JWT検証の実証ではない。
+
+**互換性注意:** この変更はPR #42の**未公開候補APIを意図的に変更する**もので、Sites保存版12への適用済みを意味しない。Sites本体の既存Token exchange/store関数は実ソースを確認し、暗号化Storeへ書き込むタイミングを分割できなければNO-GOとする。また、保存版12で未接続の`verifyIdentityBinding`は引き続き必須で、OAuth開始前に正式本人を証明できない循環bootstrap問題はこの変更では解消しない。Browser⇔MCP本人一致、Supabase OAuth client secret一致、Worker callback登録/ログ、PR #47の本番反映も未検証。
+
+**本番:** Sites公開保存版10・未公開保存版12・環境revision 5・OAuth/Relay OFF、既存DB/Secrets/Supabase/Cloudflare/家PCは無変更。署名検証callback未実装・未デプロイ。実OAuth同意・PCコマンドは行っていない。
