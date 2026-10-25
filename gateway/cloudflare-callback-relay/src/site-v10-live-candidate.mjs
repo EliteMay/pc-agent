@@ -4,7 +4,7 @@
 // Do not expose this module, signing key, verifier or tokens to client bundles.
 import { createSitesRelayClient } from './sites-client.mjs';
 import {
-  RelayError, SITE_ORIGIN, RELAY_PRODUCTION_ORIGIN, ISSUER,
+  RelayError, SITE_ORIGIN, RELAY_PRODUCTION_ORIGIN, ISSUER, TTL,
   opaque, sha, safeHeaders, safeError,
 } from './protocol.mjs';
 
@@ -80,6 +80,7 @@ export function createSitesV10LiveCandidate({
         const owner=await authorize(request);
         if(typeof owner!=='string'||!owner||owner.length>200) throw new RelayError('authentication_required');
         const pending=await loadPending(request,owner);
+        const now=(typeof clock==='function'?clock:Date.now)();
         // Before invoking even the Site's trusted authorize URL builder, confirm
         // the persisted session-bound record is for THIS owner and live flow.
         // The relay separately revalidates this immediately before prepare.
@@ -87,7 +88,7 @@ export function createSitesV10LiveCandidate({
           !opaque(pending.browserId)||!opaque(pending.csrf)||
           request.headers.get('x-oauth-csrf')!==pending.csrf||
           !opaque(pending.state)||!opaque(pending.verifier)||
-          !Number.isSafeInteger(pending.expiresAt)||pending.expiresAt<=Date.now()&&!clock||
+          !Number.isSafeInteger(pending.expiresAt)||pending.expiresAt<=now||pending.expiresAt>now+TTL||
           pending.redirectUri!==LIVE_CALLBACK_URL) throw new RelayError('authentication_required');
         const authLocation=await checkedAuthorizationUrl(
           await buildExistingAuthorizationUrl(request,pending),pending,oauthClientId);
