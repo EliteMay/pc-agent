@@ -14,8 +14,9 @@
 
 | 注入引数 | 既存Sites側で使う正規処理 | 必須契約 |
 | --- | --- | --- |
-| `authorize(request)` | 正式な本人セッション/所有者チェック | ヘッダーをブラウザ入力だけで信用しない。browser/MCP本人一致は実測まで未証明 |
-| `loadPending(request,owner)` | HttpOnly Cookie＋ownerで暗号化pendingを復号してロード | `mode:'live'`、`owner`、`browserId`、`state`、`verifier`、`csrf`、`expiresAt`、固定`redirectUri`を返す。D1 schemaの変更を推測しない |
+| `authorize(request)` | 正式な本人セッション/所有者チェック | メール文字列だけでは高権限を与えない。Site固有の本人ヘッダー真正性は未証明 |
+| `verifyIdentityBinding(request)` | **新規の必須サーバー限定アダプター**。本人セッションを独立に検証する | `{owner, principalId, browserId}` を返す。`principalId` / `browserId`は43文字の不透明値で、暗号化pendingの値と両方一致必須。HTTPヘッダー・JSON-RPC・ブラウザから受けた任意IDを検証結果とみなさない。実Sitesの正式な信頼可能識別子取得方法が不明ならOFF維持 |
+| `loadPending(request,owner)` | HttpOnly Cookie＋ownerで暗号化pendingを復号してロード | `mode:'live'`、`owner`、**`principalId`**、`browserId`、`state`、`verifier`、`csrf`、`expiresAt`、固定`redirectUri`を返す。既存の保存版11の実スキーマは未確認 |
 | `consumePending(pending)` | 既存のDB単回消費 | 並行POSTでも1回だけtrue、値をブラウザに返さない |
 | `invalidatePending(pending)` | 既存の失敗時無効化 | 再送で再利用できない |
 | `buildExistingAuthorizationUrl(request,pending)` | 既存PKCE S256/機密clientによる認可URL生成 | `state`、`client_id`、`redirect_uri`、実verifierのSHA256 challenge一致を検証後にのみ利用 |
@@ -54,3 +55,15 @@
 4. `tests/site-v10-live-candidate.test.mjs`で、URLビルダー実行中にstate・verifier・browserId・CSRF・mode・redirectUriが変更されても、Worker`/prepare`への送信数0、D1登録数0、token交換0となることを検証。
 
 **結果:** [Callback Relay CI 40152450510](https://github.com/EliteMay/pc-agent/actions/runs/40152450510)で**93件全件PASS**、[Gateway CI 40152450508](https://github.com/EliteMay/pc-agent/actions/runs/40152450508)もPASS（開発ブランチ／オフラインのみ）。これで認可URLと署名付きRelay登録の同一pending境界をテストできたが、**保存版10の実本体へはまだ組み込んでいない**。実Siteの並行ブラウザ挙動・Cookie認証・PR #47の実JWT認可は未実測。Web公開・OAuth登録・Secrets・家PCは無変更。
+
+## 2026-10-25: メール一致だけでは通さない本人セッションBinding（GitHub source-only）
+
+未公開保存版11のWork報告では、同じ所有者メールなら異なるSiteユーザーIDも`authorize`を通過するモック条件が示された。これは**実Siteのヘッダー偽装成功を示すものではない**。公開仕様に安定した`oai-authenticated-user-id`の提供保証もない。
+
+PR #42のライブ候補のみ、`verifyIdentityBinding(request)`を必須にした。既存の`authorize`に加えて、信頼できるサーバー内セッション検証から得た`owner/principalId/browserId`を、暗号化pendingの同名フィールドと照合する。検証関数が欠ければ`setup_required`で構成拒否、本人が異なれば401、すでに消費済みのpendingは従来どおり409、Relay prepare/claimやToken交換の前に停止する。
+
+`principalId`はSitesが提供する未保証のヘッダー名を指さない。**Siteのサーバー内で検証済みのセッションからしか発行/導出できない識別子**を要求する契約であり、メール・クライアント送信値・任意の自己申告フラグで代用しない。本人固有値を取得・管理できない場合は実OAuthを有効にせず、Sites側の設計を確定してから再実装する。正式保存版11のソース、DBスキーマ、セッション実装が現在の通常チャットで閲覧できないため、**実Siteへの適用・本番動作確認は行っていない**。
+
+追加テストでは（a）検証関数不在、（b）同じメール・偽装ヘッダーと異なる検証済みprincipal、（c）OAuth開始後の認証principal差し替えによるclaim拒否を確認する。live pending作成時にも正しい`principalId`を暗号化保存できること、および実ブラウザ/MCPで同じセッション本人を保証できることは別途確認が必要。Gateway PR #47（JWT実トークン検証）も別のrelease gateとして維持する。
+
+**変更禁止条件:** Sites未公開保存版11、本番保存版10、Sites Secret、Supabase、Cloudflare Worker/D1、OAuthフラグ、家PCは一切変更しない。実認証、ログ/クライアントID照合、実Site本人境界は未検証。条件が未充足ならNO-GOを維持する。
