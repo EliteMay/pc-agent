@@ -66,7 +66,7 @@ test("JWT user identity mismatch is denied even when owner email matches", () =>
   // This helper is called before querying the owner allowlist in the Gateway.
   const source = readFileSync(new URL("../gateway/oauth-pc-agent/index.ts", import.meta.url), "utf8");
   const gate = source.slice(source.indexOf("async function isAllowedUser("));
-  assert.match(gate, /consistentJwtUserId\\(ctx\\?\\.userClaims, ctx\\?\\.jwtClaims\\)/);
+  assert.match(gate, /consistentJwtUserId\(ctx\?\.userClaims, ctx\?\.jwtClaims\)/);
   assert.ok(gate.indexOf("consistentJwtUserId(") < gate.indexOf('.from("kaito_pc_relay_config")'));
 });
 
