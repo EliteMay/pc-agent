@@ -1,8 +1,8 @@
 // Restrict each OAuth client using only claims verified by @supabase/server.
 // Never derive the client identity from HTTP headers, JSON-RPC arguments or Site cookies.
-// Milestone 1: the Site OAuth bearer may only prove authenticated Gateway
-// reachability. It must not enqueue ANY Windows command, even a read-only ping.
-// Revisit additional Site tools only after an explicitly approved next stage.
+// Milestone 1: Site and individually confirmed ChatGPT MCP OAuth clients may
+// only probe authenticated Gateway reachability. No Windows queue or metadata.
+// Expanding this scope requires an explicitly approved later stage.
 export const SITE_ALLOWED_TOOLS = Object.freeze([
   "gateway_probe",
 ]);
@@ -14,7 +14,7 @@ function isValidClientId(value) {
   return typeof value === "string" && CLIENT_ID_PATTERN.test(value);
 }
 
-function parsePrivilegedIds(value) {
+function parseClientIdList(value) {
   if (typeof value !== "string") return null;
   if (value === "") return [];
   const ids = value.split(",").map((id) => id.trim());
@@ -26,18 +26,28 @@ function parsePrivilegedIds(value) {
 /**
  * `jwtClaims` must be provided by the JWT-verifying Supabase middleware.
  * Any missing/malformed configuration or claim denies the entire client.
- * Privileged client IDs are explicit and must never include the Site ID.
+ * Privileged client IDs must be explicitly identified and cannot overlap with
+ * either the Site or probe-only MCP IDs.
  * @param {{client_id?: unknown} | null | undefined} jwtClaims
- * @param {{siteClientId?: string, privilegedClientIds?: string}} [config]
+ * @param {{siteClientId?: string, mcpProbeClientIds?: string, privilegedClientIds?: string}} [config]
  */
-export function resolveClientPolicy(jwtClaims, { siteClientId = "", privilegedClientIds = "" } = {}) {
+export function resolveClientPolicy(jwtClaims, {
+  siteClientId = "",
+  mcpProbeClientIds = "",
+  privilegedClientIds = "",
+} = {}) {
   if (!isValidClientId(siteClientId)) return "deny";
-  const privileged = parsePrivilegedIds(privilegedClientIds);
-  if (!privileged || privileged.includes(siteClientId)) return "deny";
+  const probeClients = parseClientIdList(mcpProbeClientIds);
+  const privileged = parseClientIdList(privilegedClientIds);
+  if (!probeClients || !privileged) return "deny";
+  // Overlaps are a deployment mistake: reject every client, including the Site.
+  if (probeClients.includes(siteClientId) || privileged.includes(siteClientId) ||
+      probeClients.some((id) => privileged.includes(id))) return "deny";
 
   const clientId = jwtClaims?.client_id;
   if (!isValidClientId(clientId)) return "deny";
   if (clientId === siteClientId) return "site";
+  if (probeClients.includes(clientId)) return "mcp_probe";
   if (privileged.includes(clientId)) return "privileged";
   return "deny";
 }
@@ -56,20 +66,20 @@ export function consistentJwtUserId(userClaims, jwtClaims) {
 
 export function isToolAllowed(policy, toolName) {
   if (typeof toolName !== "string") return false;
-  if (policy === "site") return SITE_TOOL_NAMES.has(toolName);
+  if (policy === "site" || policy === "mcp_probe") return SITE_TOOL_NAMES.has(toolName);
   return policy === "privileged";
 }
 
 export function visibleTools(allTools, policy) {
   if (policy === "privileged") return allTools;
-  if (policy === "site") return allTools.filter((tool) => SITE_TOOL_NAMES.has(tool.name));
+  if (policy === "site" || policy === "mcp_probe") return allTools.filter((tool) => SITE_TOOL_NAMES.has(tool.name));
   return [];
 }
 
 /** Only advertise capabilities actually available to this verified OAuth client. */
 export function clientCapabilities(policy) {
   return {
-    readOnly: policy === "site",
+    readOnly: policy === "site" || policy === "mcp_probe",
     safeWrite: policy === "privileged",
     orchestration: policy === "privileged",
   };
