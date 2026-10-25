@@ -22,9 +22,11 @@ function authUrl(pending,overrides={}) {
 }
 
 async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=false,
-  verifiedOverrides={},verifyFailure=false,invalidTokenResponse=false,storeFailure=false}={}) {
+  verifiedOverrides={},verifyFailure=false,invalidTokenResponse=false,storeFailure=false,
+  insecureEmailScope=false}={}) {
   const f=await fixture({env:LIVE});
-  const owner='offline-owner',browser=value(),csrf=value(),verifier=value();
+  const owner=insecureEmailScope?'owner@example.invalid':value();
+  const browser=value(),csrf=value(),verifier=value();
   const principalId=value();
   let authenticatedPrincipal=principalId;
   let pending={mode:pendingMode,owner,principalId,browserId:browser,csrf,verifier,
@@ -70,6 +72,15 @@ async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=fals
     pending:()=>pending,csrf,owner,browser,
     changeAuthenticatedPrincipal:()=>{authenticatedPrincipal=value();}};
 }
+
+test('pre-OAuth email address is not an acceptable owner session scope',async()=>{
+  const s=await setup({insecureEmailScope:true});
+  const r=await s.candidate.start(s.req('/oauth/start'));
+  assert.equal(r.status,401);
+  assert.equal(s.calls.length,0);
+  assert.equal(s.exchanges.length,0);
+  assert.equal(s.stored.length,0);
+});
 
 test('default OFF blocks every live handler before touching owner, pending, Worker or OAuth',async()=>{
   let calls=0;
