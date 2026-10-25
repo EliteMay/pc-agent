@@ -144,6 +144,7 @@ test('invalid browser identity, Origin, GET method and callback query do not rea
     s.req('/oauth/start','POST',{origin:'https://attacker.example.invalid'}),
     s.req('/oauth/start','POST',{'x-test-owner':'impersonator'}),
     s.req('/oauth/start','POST',{cookie:value()}),
+    s.req('/oauth/start','POST',{'x-oauth-csrf':'invalid'}),
     s.req('/oauth/start?code=private','POST'),
   ];
   for(const req of variants){
