@@ -16,12 +16,12 @@ const config = Object.freeze({
 });
 const siteClaims = Object.freeze({ client_id: config.siteClientId, sub: "owner" });
 
-test("Sites client is restricted to the three bootstrap tools", () => {
+test("Sites client is restricted to only the Gateway probe in first milestone", () => {
   assert.equal(resolveClientPolicy(siteClaims, config), "site");
-  assert.deepEqual([...SITE_ALLOWED_TOOLS], ["gateway_probe", "relay_ping", "ping"]);
+  assert.deepEqual([...SITE_ALLOWED_TOOLS], ["gateway_probe"]);
   for (const tool of SITE_ALLOWED_TOOLS) assert.equal(isToolAllowed("site", tool), true);
   for (const tool of [
-    "capture_notepad", "notepad_gui", "write_text_file", "edit_text_file",
+    "relay_ping", "ping", "capture_notepad", "notepad_gui", "write_text_file", "edit_text_file",
     "create_directory", "read_text_file", "system_info", "list_directory",
     "find_paths", "search_text", "list_processes", "run_development_command",
     "task_begin", "task_status", "task_step", "task_finish", "unknown",
