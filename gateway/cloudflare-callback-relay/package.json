@@ -1,0 +1,8 @@
+{
+  "name": "kaito-oauth-callback-relay-dummy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": { "test": "node --no-warnings=ExperimentalWarning --test tests/*.test.mjs", "check": "node tools/check.mjs" }
+}

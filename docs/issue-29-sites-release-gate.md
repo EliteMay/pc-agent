@@ -1,0 +1,401 @@
+# Issue #29: Sites保存版3の公開候補・D1 migration・署名鍵・復旧ゲート（未承認）
+
+更新: 2026-10-20。対象: `EliteMay/pc-agent` Draft [PR #42](https://github.com/EliteMay/pc-agent/pull/42) / [Issue #29](https://github.com/EliteMay/pc-agent/issues/29)。
+
+## 目的・Evidenceの境界
+
+第1目標の通常ChatGPT→自作Plugin→自作Agentによる家PC操作へ進むため、既存本人限定 `Kaito PC Agent Web Bridge` を維持しながら、Sites保存版3 (`bbb15b2`) の将来の**ダミー限定** Hosted実行を安全に準備する。**この文書は設計・承認判断用であり、Sites/WorkerのDeploy・Secrets・DB・実OAuth・PC操作を許可しない。**
+
+- **Workの本人提供readback:** 保存版3 `bbb15b2`、作業ツリーclean、内部mock統合テスト32/32 PASS、後日の再実行12/12 PASS。ブラウザQAプレビューは本人Session/Origin未確認で起動せず。実行入口へのmock注入はテストだけ。
+- **Workの本人提供hosted readback:** 現行公開SitesでD1 Binding 0、テーブル0、Hosted SecretsはOAuth用の4件のみ。Relay署名Secretなし。D1作成単独の正式native操作は見つからず、デプロイ時にDB構築→migration→コード切替となる可能性がある。**実際のSites native tool仕様、実行順序、復旧操作は次のWorkセッションで再確認するまで確定事実とはしない。**
+- **ChatGPT通常チャットの実probe:** 公開済みPlugin `gateway_probe({})` は `fixed-diagnostic` / `supabase_connected:false` / `pc_connected:false`。保存版3のHosted稼働証拠ではない。
+- Workerは既存Cloudflare Freeの `kaito-oauth-callback-relay-dummy` を再利用。Cloudflareの現行版と旧版metadata/D1参照は過去にreadback済みだが、配置版とPR #42のbundleバイナリ同一性は未確証。既存Worker Secretの値はCloudflareから読み戻せない。最新コードの `src/sites-client.mjs` はserver-onlyで、実Work Siteへのadapter wiringは未実装。
+- **禁止:** 本人許可のないSites/Cloudflareの配置・配信切替、Hosted DBへの変更、migration、Secret設定・ローテーション、Site公開範囲変更、実Workerへのダミー送信、Supabaseの実認可コード・tokenの処理、家PCへの操作。
+
+## 1. 公開候補（現本番は変更しない）
+
+Work上の新たな「公開候補」は既存の**保存版3を基にした未デプロイの改訂**として作る。Cloudflare・Supabase・PCとは独立。以下は候補が満たすべき**確認項目**であり、動作保証や「保存版4作成済み」を意味しない。
+
+1. **固定診断の後方互換:** 既存のPlugin tool名 `gateway_probe` /引数/戻り値・本人限定アクセスを維持。Supabase/PC接続に成功したかのような状態・write権限・ブラウザUIを追加しない。
+2. **ダミーRelay機能は初期状態OFF:** 新規Sites `/oauth/start` / `/connect/complete` は feature/config の条件を満たさなければ固定503等の有限エラーでfail-closed。既存OAuth endpointの実`authorize`/`token`呼び出し不可。Configが未登録の初回deployで既存診断を落とさないことをテストで確認。Feature gateを本番に追加する要否と既存コードとの最小差分はWorkが検証し、追加できなければ公開停止。
+3. **SessionとCSRF:** owner/sessionの正本はSitesの信頼済みdispatch/HttpOnly cookie、Originは明示的な既存本番HTTPSの固定値。内部QA用`terminal.local`を本番Allowlistへ追加しない。test owner header等をproductionへ持ち込まない。
+4. **実Worker接続アダプター（有効化前に実装・テスト）:** server-only `createSitesRelayClient` の `fetcher` にWeb標準fetchを使い、固定 `https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev` のみ許す。署名用keyはSites公式Hosted Secretからのみ読み、ログ、client bundle、MCP response、query、cookieに出さない。POSTは`/prepare`/`claim`限定、redirect reject、timeout上限・response size上限・unknown JSON field拒否を維持する。**キー・DB準備前にLive送信しない。**
+5. **Save/Bundling:** 本人限定共有と現在の公開 `gateway_probe` を維持。保存版3 `bbb15b2` はSite Work側の保存コミットであり、PRのGitHub SHAと混同しない。候補のWork commit、bundle digest、migration ID、既存公開Version/deployment IDを記録してから判断。
+6. **最低限のテスト:** 旧20＋新12だけでなく、`DB` bindingなし・schema未適用・Relay secretなしでも固定診断の既存応答を維持するテスト、OAuth禁止・Relay機能OFF・失敗応答の匿名化、owner/CSRF/replay/timeout、Browser bundle Secret marker 0、`node --test`/type/lint/buildを確認する。既存のテスト件数やPASSを実クラウド成功と誤認しない。
+
+
+7. **CSRF追加レビュー: state-changing GET:** GitHubの現行 `gateway/cloudflare-callback-relay/src/sites-client.mjs` は `GET /connect/complete` で`consumePending`→署名付き`/claim`を呼び得る。通常のSite saved-v3コードにさらに保護があるかは未確認だが、認証付きブラウザが他Originから強制遷移されるとpendingを破棄させられる可能性がある。**同じOriginのGETを表示/検証だけにし、本人セッション由来のCSRFを伴う同一Origin POSTでconsume/claimする案**をWorkで既存Routeと照合。安全なPOST動線・Cookie検証・query-free callback 303を両立できるまで実OAuthを有効にしない。モックテストの通過だけで、実ブラウザのCSRF安全性は証明できない。
+
+## 2. Hosted D1作成とmigrationの安全ゲート
+
+**重要:** Work readbackではD1単独作成コマンドが見つからず、Sites managed deployに連動してDB作成/Schema migrationが**コード公開前に先行し得る**。初回デプロイを「DBだけ構築」目的で実行しない。
+
+WorkがSites nativeから次を実際に読み取り、表に埋めるまで外部WriteはSTOP:
+
+| 必要な確証 | 現時点 | STOP条件 |
+| --- | --- | --- |
+| 既存の公開Site deploy ID / known-good source、共有範囲 | 再取得待ち | 旧版へ復旧する公式操作が不明 |
+| 保存版3が使う実D1 schema / migration SQLと順序 | 保存版コード自体は通常チャットから読めず未確認 | 暗黙の破壊的SQLや未確認のデータ移行 |
+| 既存Hosted DBとnew DBの識別・テーブル実在、migration log | 現行Binding 0・table 0（Work報告） | DB対象が不明・別SiteのDBを触る危険 |
+| old code + new schema で `gateway_probe`継続 | 未検証 | 旧版がmigration後に壊れる |
+| new code + migration未適用 / Secret未登録のfail-closed | 未検証 | 未設定時にfixed probeも失敗する |
+| Sites deploy失敗後のDB残存と公式復旧方法 | 未検証 | DBが変更されうるのに止め方がない |
+| Free枠・D1作成課金条件 | 既存実行0円優先、現時点の利用条件未確認 | 自動課金やPaid移行の可能性 |
+
+実行前のmigration候補は**既存テーブル非破壊の追加だけ**を原則とし、`DROP`、既存行の`DELETE`、旧列置換、既存Auth/session/pendingの意味変更を含めない。テーブルが0件とのreadbackは「本番保存データが絶対にない」の証明にならない。Migration replay/idempotency、部分成功・再試行の挙動、既存の暗号化pending・sessionのread互換をテストする。DB新設しか行わない候補でも、DB名/ID・テーブル構造・migration recordが実際に正しいかを確認する。
+
+**復旧方針:** デプロイに失敗しても旧公開Siteが応答する場合、旧版維持を第一とする。DB migrationが先行済みなら**自動Down migrationを行わない**。互換性が確認できた旧コードを維持して原因を調査し、安全なforward-fixとDB個別復旧を判断する。コードを戻すこととDBを戻すことを同一操作扱いしない。破壊的DB復旧は別承認。
+
+## 3. 署名鍵の安全な配布（未実施・要判断）
+
+- 使用中のCloudflare Workerには `RELAY_SIGNING_KEY` Secretが存在するが値のreadback不可。Sitesには既存OAuth用4件しかなくRelay用Secretは**無い**。Cloudflare側の暗号化鍵`RELAY_STORAGE_KEY`はSitesへ**共有しない**。OAuth client secretもWorkerへ送らない。
+- **第一候補:** 本人だけが管理する既存の安全な保管先に現在の`RELAY_SIGNING_KEY`の元値が現存し、本人が値の出所と整合を確認できる場合、Sites公式のHosted Secrets UIへ同一値を直接投入する方式を検討する。ChatGPT / Workチャット / GitHub / Cloudflareダッシュボード読取経路へSecret文字列を出さない。**保管先不明なら「取得できる」と推測しない。**
+- **第二候補:** 元の署名鍵を本人が再取得できなければ、本人が承認した管理下で**新たな鍵を生成し、SitesとWorkerを計画的に更新する**。更新の前後で既存dummy pending（TTL 5分）とnonce（90秒）の滞留・署名失敗・rate/cron影響を確認。更新順序、ダウンタイム・切替手順・Worker active Version変更、旧鍵の再利用不可、復旧不可リスクを事前に明記する。Secret上書きがWorker新Versionを作り得るので、その発行・100%配信も別途明示承認が必要。鍵ローテーションを本会話で実行しない。
+- Site側Secret登録には**Sites独自の公式Hosted Secret書込手段**が必要。登録可能でも、実行時のkey読み込み・Server-only境界・ログ出力なし・追加料金なしを実環境で確認するまでsigned Live送信不可。新しいサービス、API Key、共有ログ置き場を増やさない。
+
+## 4. 別途承認後の公開・復旧実行手順（この文書では一切実行しない）
+
+| Gate | 入力・実施 | 成功条件 | 失敗時 |
+| --- | --- | --- | --- |
+| A: 書込み前 readback | 現行published Site ID/commit・共有者数・DB Binding/Schema/Secret名、GitHub PR/Work candidate固定、Sites正式rollout/restore仕様の取得 | 現本番へ復帰する実操作を特定でき、Additive migrationで旧Probeが維持 | 不明ならDeploy停止 |
+| B: Release candidate QA | OAuth/Relay実通信は無効。正常/拒否/未設定時/old-code+new-schema互換をmock・ローカルSQLiteで検査。client bundle監査 | テスト・type/lint/build PASS、既存 `gateway_probe`契約維持、Public JSにSecretなし | 修正して**未公開保存**、再検査 |
+| C: 個別本人承認 | Hosted D1作成/migration・Sites deploy・Secret登録・Worker署名key更新・Workerへ実リクエスト、の操作ごとに効果とリスクを説明 | 本人が**どの操作に同意したか**明確 | 承認がない操作は実施しない |
+| D: Sites管理Deploy（承認済みの場合のみ） | nativeによりどのmigrationがいつ適用されたか、deploy ID、DB ID/schema versionを記録。初回はfeature OFF・固定診断維持 | 固定Plugin本人認証で公開の `gateway_probe` は旧どおり `fixed-diagnostic`; 新Relay routeは未設定時fail-closed | 旧版が正常なら維持。DBは自動巻戻し禁止。原因を特定しforward-fix/別復旧 |
+| E: Dummy-only Live（別承認後） | key/binding/Origin/本人認証を検証し、固定test state/codeを使いSites server→Worker`/prepare`→dummy callback→`/claim` | 201→303→200→replay拒否（状態消費はWorker 409等、Siteはlocal pending無しで拒否でもよい）。実D1暗号文消去/TTL、Secret/URL不露出 | 失敗ステータス・投入環境・DB書込結果を記録、再試行乱発や鍵/権限緩和はしない |
+| F: 第1目標へ復帰 | 上記とは別にOAuthログ保護・本人同意・既存Supabase Gatewayへ認証済みprobe。さらにPC Agent/Managerと安全承認を実機で検証 | Issue #29の4条件を**Remote Desktop Commander停止中**に実証 | dummyテストをPC接続の成功扱いしない |
+
+復旧時の判断:
+- `Site deploy失敗`＋`旧固定Plugin正常` → 本番Siteは変更せず、migration残存を監査して停止。
+- `Site新コードが旧Pluginを壊す` → **以前の公開known-goodを正式機能で復元可能・新schema後も安全**であることを確かめてからコード復元（勝手に実施しない）。
+- `DB migration partially applied` → 追加SQL以外に何が実行されたかreadbackし、削除/restoreの自動実行禁止。既存保存データを失わないforward-fixを優先。
+- `Relayの署名失敗` → 秘密値をログに出さず、key登録状態・active worker version・now/nonce/Originを安全なBooleanで判定。鍵の上書きや同じnonceを連打しない。
+- `Cloudflare側Workerが不安定` → SitesのRelay動線だけOFF。Cloudflareの旧Versionの無条件rollbackは禁止（Script ETag相違・Secret変更履歴あり）。既存Site `gateway_probe`を維持。
+
+## 5. 次のWorkへの作業指示（**READ/未公開コード候補の保存まで**）
+
+1. 対象Siteで最新の保存版3（`bbb15b2`であるか再確認）、現在公開中の固定診断版のSource/Deploy ID・owner限定共有、Hosted DB/Secret名、実際に使うSites native Deploy/Migration/Restore仕様を**読み取り専用で確認**。
+2. Site既存コードの**正確な**migration SQL、DB binding宣言、feature flag実装の有無、OAuth旧Routerと `gateway_probe` をレビューし、上記Gate A/Bの互換性を実テストできる最小案を提案。無理にfake preview / owner header等を追加しない。
+3. 公開候補の内部コード変更が必要なら**未公開保存まで**で止める。CI・mock tests・type/lint/buildを確認。実際に動かした環境（SQLite in-memory vs Hosted D1、mock vs real Worker）を明記。
+4. この文書の空欄（正確なSource SHA/Deploy ID、DB schema/migrations、戻し方、費用・Owner Secretの安全運用）をWorkの観測結果で埋め、**承認が必要な操作を短いチェックリストにする**。条件を満たさなければ設定・Secrets・Deploy・本番通信へ進まない。
+
+**Stop condition:** 本番の固定Plugin維持とmigration失敗時の回復方法が独立して確認できないなら、Sites初回Deployを実施しない。技術的に停止中でも正常な判断である。
+
+参考: [Cloudflare Relay Runbook](issue-29-cloudflare-deploy-runbook.md)、[Sites handoff](issue-29-chrome-plugin.md)、[Guide Security](https://github.com/EliteMay/web-project-guide/blob/main/docs/06-security.md)、[Guide Testing](https://github.com/EliteMay/web-project-guide/blob/main/docs/07-testing-quality.md)、[Guide Data](https://github.com/EliteMay/web-project-guide/blob/main/docs/03-data-storage.md)、[Guide Maintenance](https://github.com/EliteMay/web-project-guide/blob/main/docs/09-maintenance.md)。
+
+## 2026-10-20 保存版4の実装結果と「migrationを再実行しない」決定ゲート
+
+**Workからの本人提供結果（この通常チャットでSiteコード/実行ログを独立取得していない）**
+
+- Sites未公開の保存版4 commit: `7b773ddbaf36d5ef1248a980b7ca4dd37c67a521`。公開中の既存固定診断Pluginは変更なし。
+- `gateway_probe`既存Contract維持。D1/Secret/schema未設定時もfixed probeはmock検証で正常。Relayと実OAuthは初期OFF、単なるenv-var入力では有効にならない構成。
+- `GET /connect/complete`は状態変更しない。本人/HttpOnly Cookie/Origin/CSRFを満たすPOSTのみpending consume/claimを行う。Workの報告では37/37テスト、型、lint、build成功、client artifactの指定Secret marker 0。
+- **重要:** 4個の新規テーブルだけをCREATEする現行migrationはローカルSQLiteで旧版互換・既存データ維持を確認したが、**同じSQLの再適用や途中適用後の単純再実行では失敗**。Hosted migration履歴、partial applyの挙動、rollback後のschema互換はまだ未検証。Hosted D1 Binding 0、table 0（Workからの過去読み取り）。
+- Workの報告は**安全な初回Hosted migration成功**を証明しない。未公開保存だけなので本番データを変更していない。
+
+**本番前の次の1課題: Sites native migration runnerの厳密な実装確認**
+1. Sites Workで、現在の保存版4 `7b773ddb…`、公開中Version ID、migration SQL全文、schema/catalog宣言、正式デプロイ操作のmigration実行順序、migration履歴テーブルとTransaction境界を**実際に読み取る**。どのチェックポイントから自動再試行するのか、途中で4テーブル中1〜3テーブルだけ存在するとどうなるかを明確にする。推測しない。
+2. 一度だけmigrationが実行されることを履歴で保証する設計でも、**デプロイ途中失敗時のSQL再実行**と差分整合の検証が必要。空のローカルDBだけでなく、A.未適用、B.全部適用済み、C.1〜3テーブル適用済み、D.同名テーブルが異なるschema、E.旧code+new schema、F.新code+schema未適用をテストする。
+3. **部分適用後の反復実行に失敗するなら**、既存テーブル破壊を伴わない最小限のmigration/runner修正案をWorkで準備し、検証後も未公開保存にとどめる。`CREATE TABLE IF NOT EXISTS`は**不一致schemaを無視する**危険があるため、安易に付けるだけでは合格としない。正しいschema fingerprint/列・index検証、明示的migration version/history、既存データ非破壊とTransaction境界に合わせる。
+4. 公式Sites操作でmigrationの独立Dry-runが利用できない場合はその制約を記録し、初回Deploy前に旧固定Pluginの復旧手順（source/deploy ID、DB残存確認、environment/Secret変更影響）を実観測できる状態にする。**実Deploy/新D1/Hosted migrationの実行は別途本人承認**。
+
+**追加の現在仕様:** [OpenAI公式Sites Help](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)は「publishing can change the Site's database before the new version goes live」「restoring earlier version restores code, not DB/files」「regional hosting siteのSecret値更新は再公開なしでもliveに影響し得る」と明記。Sites利用料は[同ヘルプ](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)で「building/editing counts toward Codex usage、run/hostingは別枠」と説明されるため、**Cloudflare Workers FreeだけでSitesの追加費用0円を保証しない**。現在の本人環境で課金/QuotaのUIを確認するまで本番Deployを承認しない。
+
+**次実装の優先順位:** migrationの再試行/部分適用を調査→必要なら未公開修正→Hostの正規Deployと課金・復旧ゲート確立→必要最小限のサーバー限定通信adapterと本人POST UI→署名鍵の安全なSecret登録案→本人承認後にdummy実通信。未実施のOAuthや家PC E2Eを成功扱いしない。
+
+## 2026-10-20 保存版5とSites正式migration仕様の確認ゲート
+
+### Workが報告した未公開成果（正常性はWork報告、通常チャットからSites内部コードは未取得）
+
+- Sites保存コミット: `4478d3490506340634a58a5b1403c02c97e5a41b`、未公開。固定診断`gateway_probe`の後方互換を維持し、Relay/実OAuthは初期状態で禁止。
+- SQLite専用の非破壊リカバリとschema不一致検出を追加。新規4テーブルが存在/欠落する全16状態、SQL再実行、旧データ維持、失敗時ロールバックを**ローカルメモリ内SQLite**で検証。
+- 固定Worker Originしか使わないserver-onlyの実通信adapterと、本人/Cookie/Origin/CSRFを維持するPOST操作UIを実装。ただし**実Workerは呼び出していない**。
+- Work報告では**46/46 tests PASS、型検査・lint・build PASS、実通信禁止テスト成功**。Hosted D1でこれらを実行したわけではない。
+- **残る唯一のリリース前主要ゲート:** Sites Hosted D1の「migration履歴管理・Transaction境界・partial failure後のretry/resume」を現在の本人Siteのnative hosting toolingで検証できていない。ローカル復旧モジュールをHostedの自動Migration保証と解釈しない。
+
+### 2026-10-20 OpenAI公式資料で新たに確認したこと
+
+1. [Creating and using ChatGPT Sites](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites) は、**デプロイ中にlive切替より前のDB変更が残り得る**こと、バージョン復元ではコードだけ戻りDB/ファイルは戻らないことを明記している。Sitesの正式migration runnerが全SQLを単一Transactionにすることや、自動retryが何を基準にするかは同ページから確認できない。
+2. 同ヘルプの現行FAQは、**Plus/ProのSites hostingは現在利用プランに含まれる**と明記。Siteの作成・編集はCodex使用量を消費し、Sitesのrun/storageには共有限度がある。料金0円の目標に対し、**別サービスへの支出は不要と見込めるが、限度超過や製品の料金変更を勝手に許可しない**。Cloudflare Freeとは別のquota。旧文書にある「Plus/Pro Hostingが必ず別料金」という趣旨の解釈は採用しない。
+3. [Sites developer guide](https://learn.chatgpt.com/docs/sites) と [Publish and share](https://learn.chatgpt.com/docs/sites/publishing-and-sharing) では、version saveとproduction deployが別ステップ、`.openai/hosting.json`内の`d1: "DB"`、artifact内のmigrationのReviewが必要なことを確認。公開資料の対象箇所から、**本人のSites backendでのmigration atomicity/idempotency/履歴表の仕様までは確定できなかった**。一般的なCloudflare D1/Drizzle動作からSites内部を類推しない。
+
+### 次の1タスク（新しい保存版を作る前に、Sitesネイティブ読取と仕様照会に集中）
+
+**対象:** 現在公開中の固定診断Siteと保存版5 `4478d349…`。他Site/Cloudflare Workerには変更しない。
+
+1. Workで**現在のSites実装・専用skill/referenceの現物**を読み、利用可能なmigration/D1/hosting nativeコマンドの仕様、正式migrationパッケージ `dist/.openai/drizzle/**`、適用済みmigrationの履歴/チェックサム、Transaction境界、並行deploy/途中失敗時の規則を確認。API・tool説明とSource/Host観測を証拠として区別。専用機能が存在しなければ「未提供」と記録する。
+2. ソース側の4テーブルmigrationについて、未適用/全部適用/部分適用の各状態を既存の**ローカル**検証結果と照合し、「Sites hosting runnerが自動で再実行しないことをどう保証するか」「1〜3テーブル適用後のcheckpointがどこか」を具体的に回答する。**正式Toolが答えられない場合、推測でYesにしない。**
+3. Hosting nativeのread-only操作がある場合だけ、**現published deploy IDと共有範囲、既存DB Binding・tables/migration historyの有無**を再観測する。Viewerの変更/DB provision/URL作成/Secret登録/Worker接続・deployはまだ禁止。
+4. MigrationのTransaction/復旧仕様が不明なら、OpenAI公式Supportへ問い合わせるための**非機密質問文**を準備する。Secret、Site owner email、private source/SQL本文、認証データをサポートへの初回依頼に記載しない。規約やhelpで保証されない処理を自作修正だけで解決済みにしない。
+5. 質問へ回答が来るまでは、**Site公開・D1構築・migration適用を止める**。新しい保存版6や追加のローカルテストは、実際の失敗原因が判明してから必要な最小修正に限定する。無関係のCloudflare auditやプレビューの試行を繰り返さない。
+
+### 公開許可ゲート（すべて未承認）
+
+| 関連操作 | 条件 |
+| --- | --- |
+| Sites保存版5をproduction deploy（D1 migrationを伴う可能性） | 正式なmigration/復旧条件の把握、旧公開Site固定診断の復元経路、owner限定共有、課金/usage限度、対応バージョンを本人がレビューし**明示承認** |
+| Sites Relay Secretの登録 | 既存Worker署名鍵の安全な同一値持込み方法が明確か、別承認の鍵ローテーション計画。値はGitHub/会話に出さない |
+| Relay adapterを有効化して実Workerへdummy送信 | Sites/Workerの両端key/Origin/Bindingsに加え本番ログ/アクセス権の確認と**別承認** |
+| Supabase OAuth認可、PC Agentの本番GUI操作 | 前段dummy実通信の確認のさらに後、本人OAuth/PCローカル承認を別ゲートで実行 |
+
+Issue #29の4つのPC操作完成条件はすべて未検証・未達を維持する。
+
+## 2026-10-20 保存版5 Hosted migrationネイティブ調査の結論（Work本人報告）
+
+- WorkはSites保存版5 `4478d3490506340634a58a5b1403c02c97e5a41b`を変更せず、Siteネイティブ管理仕様・公開資料・保存されたPR #42 HEAD `edd66367`を調査したと報告。
+- build artifactにSQLと**Drizzle journal**の存在を確認したが、これらは**Hostedに適用済みという証拠ではない**。Hosting migration履歴/チェックサム、同時実行・重複実行防止、transaction粒度、SQL途中失敗後のcommit状態、部分適用後のretry/repairは調べられる公式機能と文書から不明。
+- OpenAI公式[Creating and using ChatGPT Sites](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)でDB変更がアプリ公開より先行して残り得ること、復元でコードしか戻らないことは明記される。詳細な内部migration保証は明記されず、**運用上の契約として確認できていない**。
+- Work readbackでは現公開環境のD1 Binding 0、tables 0。旧保存版1のsource・archive・成功deploymentが存在し、正式な再デプロイ操作も提示されるが**実復元は未実行**。旧公開時のEnvironment revision `0`に対し現在の保存設定はrevision `5`。旧版の再デプロイを旧環境・Secrets・DBまで含む完全復元として扱わない。
+- Work報告でPlus/Pro Sites hostingはプラン込み、SiteごとのDB上限10GB。**ユーザー固有の使用量・共有枠残量は未取得**で、他リソース・利用制限まで「無料・無制限」と認定しない。
+- Work作成のOpenAI Support非機密問い合わせ案は**未送信**。質問事項：migration識別子/適用履歴参照、SQL/ファイルtransaction、SQL+履歴更新の原子性、4テーブル部分適用時の復旧とretry、同時deploy・重複防止、writeしないdry-run、コード復元後のDBとEnvironment取り扱い、Plus共有枠の表示/超過挙動。
+- **次の唯一の外部対応:** ユーザーが[OpenAI Support](https://help.openai.com/en/articles/6614161-how-can-i-contact-support)の右下チャットから非機密の仕様質問を送付（チャットからの自動送信は未実施）。回答を記録し、確証が得られなければ、実際に確認可能な小規模初回DB作成・リリースの残余リスク/止め方を明示して別判断にする。質問待ちの間、保存版6作成・Hosted DB作成・Deploy・Secret変更・実Worker通信・実OAuth・PC操作は行わない。
+- Issue #29の4完成条件は未達。現公開固定Plugin・Cloudflare Workerは変更なし。
+
+
+## 2026-10-20 Hosted migration保証なしで進める前提と、ローカル再実行チェッカー（Claude実装・ローカル検証のみ）
+
+**前提（ユーザー報告）:** OpenAIサポートへ問い合わせ済みで、Hosted migrationの内部保証（履歴・transaction・途中失敗後のretry）は**回答できない**と確認された。問い合わせは繰り返さない。したがって以後は「Hostedの保証はない」ことを前提にリスクを設計する。
+
+**撤回:** 前回この節に書いた「runnerの挙動を問わず安全」は**撤回する**。下記ツールが示すのはローカルSQLiteでの結果だけで、Hosted runnerの安全は何も証明しない。
+
+### ツール `gateway/cloudflare-callback-relay/tools/migration-safety.mjs` の保証範囲
+| 区分 | 内容 |
+| --- | --- |
+| 判定できる（ローカルin-memory SQLite） | 追加のみか／先頭k文をコミット済みにした後で全文を再実行しても失敗せず同じ構造に収束するか／無関係な表の行が残るか／CHECK・DEFAULT・FK・UNIQUE・COLLATE・部分index・WITHOUT ROWID・view・triggerを含む構造指紋（`fingerprint()`）が変わるか |
+| 判定できない | Sites/Cloudflare D1 runnerのtransaction範囲・履歴/チェックサム・同時deploy・SQLと履歴更新の原子性・D1固有挙動・単一文の途中失敗（SQLiteでは文は原子的と仮定） |
+| **区別が必要** | `verdict: rerun_safe` は**再実行可能性だけ**。既存の同名表が期待構造かは**保証しない**。`IF NOT EXISTS` は別構造の既存表を黙って残す場合がある（出力 `existingSchema.sameNameDifferentShape[].sqlOutcome` が `silently_accepted`）。後続の文（例: 存在しない列へのindex）が失敗するとloudなエラーになるが、これは偶然であり互換性の保証ではない。常に `existingSchema.requiresRuntimeFingerprintCheck: true` とし、実行時に `fingerprint()` 相当で照合してRelay機能のみfail-closedにする必要がある |
+| 指紋の性質 | sqlite_master.sqlの正規化文字列も含む保守的比較。見た目だけの違いを「差異」と判定し得る（fail-closed側）。文字列リテラルは大文字小文字を区別する |
+
+SQLの解析は最小の字句解析（文字列・引用識別子・コメントを分離）で行い、`IF NOT EXISTS`の付与は文頭のCREATE TABLE/INDEXのコード部分に限る。文字列リテラル・コメント・引用識別子は改変しない（回帰テストあり）。字句を確定できないSQL（閉じない引用/コメント、`BEGIN`/`TRIGGER`/`CASE`を含む複合文）は推測せず `verdict: unsupported_sql` で拒否し、空DBで実行できないSQLも同様。拒否は「安全」ではなく「未判定」を意味する。
+
+実行: `node --no-warnings=ExperimentalWarning tools/migration-safety.mjs --suggest <file.sql>`（終了コード0＝`rerun_safe`のみ）。出力は構造のSHA-256のみで、SQL本文は出さない。
+
+### 対象の混同を避ける
+- **Cloudflare Workerの `migrations/0001_relay.sql`（適用済み・変更しない）:** ローカル判定は追加のみ・データ保持OK・**`rerun_unsafe`**（途中適用k=1..5すべて再実行失敗）。`IF NOT EXISTS`化で`rerun_safe`になるが、Cloudflare側にも同化は不要で、wranglerの履歴が再実行をどう防ぐかは**当方未検証**。
+- **Sites保存版5の4テーブルmigration:** 実SQLに当方はアクセスできず、**このツールは未実行＝検証未実施**。Work報告の「SQLite専用復旧・16状態」は引き続き報告ベースで、Hostedの保証ではない。
+
+### Workの次の手順（読み取り＋ローカルのみ・実Hosted操作なし）
+1. 保存版5の `dist/.openai/drizzle/**/*.sql` を上記ツールに通し、JSON（SQL本文なし）を記録。
+2. `rerun_unsafe` なら`IF NOT EXISTS`化の未公開修正を作る。ただし`rerun_safe`でも1項の互換性は別問題。
+3. Relay機能のみfail-closedにする起動時構造照合がSite側にあり、旧code+新schema／新code+未適用schemaでも`gateway_probe`が維持されることを確認（実Hostedではなくローカル/モックである旨を明記）。
+4. **DB宣言なし初回Deploy案:** `.openai/hosting.json`から`d1`を外せばmigration自体が発生しない見込みだが、Sitesの実挙動は未検証。Sites側でのみ適用・確認可能。dummy通信にはSite側のpending/session保存が要るため、それを別の保存先にするか、D1宣言を後段に分ける設計はWorkが判断する。
+
+### 初回Hosted Deployのリスクと止め方（実行は別承認、本節は計画のみ）
+| リスク | 緩和（ローカル） | 止め方/復旧 |
+| --- | --- | --- |
+| migrationがlive切替前に適用され残る（公式Help明記） | 追加のみ・再実行可能なSQLのみを出荷 | コード復元はDBを戻さない。旧コードが新表を無視して動くことを事前にローカル/モックで確認。自動Down migration禁止 |
+| 部分適用後のretry失敗 | `rerun_safe`判定 | 判定外（Hosted）の挙動は不明。失敗時は新たなdeployを乱発せずDB状態をreadbackしてforward-fixを別承認で判断 |
+| 同名別構造の既存表 | 起動時の構造照合（Relayのみfail-closed） | Relay無効化、`gateway_probe`維持 |
+| 費用・枠 | ユーザー側UIで承認前に確認 | 不明なら中止 |
+
+これらはいずれも「ダミー通信へ進む前の障害を減らす」計画であり、Hosted上での成功を示すものではない。
+
+## 2026-10-20 保存版5実SQLのWork検証: rerun_unsafeとschema照合見逃し
+
+**根拠の区別:** 以下はChatGPT Workからユーザーが転送した**ローカル検証の報告**であり、この通常チャットからSites保存版5内部のSQLとテストログを直接取得していない。Sites/Cloudflare/Hosted DB/Secrets/PCの実設定は変更されていない。
+
+- PR #42固定HEAD: `7cdd7abc2a111a260bd6d3164bee1cc49c5ca290`。Work報告ではmigration-safetyツールのGit blobと対象コミットの一致を確認。
+- Sites未公開保存版5 `4478d3490506340634a58a5b1403c02c97e5a41b` の成果物にmigration SQL `dist/.openai/drizzle/0000_late_wong.sql` が**1件のみ**。Drizzle journal `idx:0`、4 SQL文。Workは保存ソースと成果物SQLの一致も報告。
+- ツール結果（**local-sqlite-only**）: `verdict: rerun_unsafe`、`retryFailsAfter:[1,2,3,4]`、`nonAdditive:[]`、`convergeMismatch:[]`、`dataPreserved:true`、`validator_exit_code:1`。`dataPreserved`はツールが用意した**無関係テーブルの検証行**のみを意味する。
+- `IF NOT EXISTS`を付与した**一時メモリ上の仮案**はローカル `rerun_safe` になるが、同名でschemaが異なるテーブルを黙って保持し得る。この仮案をSites保存版5へ適用していない。Hosted runnerの原子性・retry/履歴・本番復旧保証は依然不明。
+- Workの既存schema照合は、通常の型不一致ならRelayを拒否・通信0で固定診断 HTTP 200を維持。しかし**引用列名内部の空白を正規化で削り、必須列が欠けた構造を一致と誤判定**する不具合を実際に再現。既存mock 13/13 PASSだが当該回帰例は検出できていない。
+- 実Relay Adapterは現時点でHosted入口と未結線、Relay/実OAuthはOFF。本番dummy実通信も実行していない。
+
+### Workでの次工程（未公開保存候補だけ、Hosted未操作）
+
+1. **まずschema照合を最小修正:** 引用識別子・文字列を意味の変わる形で正規化しない。SQLiteの構造情報（例: `PRAGMA table_xinfo`、index/unique/foreign keyなど必要な情報）と宣言した期待schemaを比較し、必須列の欠落・別名・空白違い・型違い・index違いなどをfail-closedとして拒否。引用列名で見逃していた再現ケースの**修正前FAIL / 修正後PASS**を追加する。Relay機能のみOFFになり、固定 `gateway_probe` と既存HTTP応答は壊さない。
+2. **続いてmigration:** `0000_late_wong.sql` が一度もHostedに適用されていないことを再確認。既存ソース/migration journalの正本関係・ビルド時の自動再生成・履歴の整合性を調べ、既存環境/Drizzle規則が許す場合だけ**未公開の次の保存候補**として、4 CREATEそれぞれの `IF NOT EXISTS` 化を評価。生成済み `dist/` を直接編集して完了扱いにしない。Journal/checksum/順序を勝手に偽造・削除しない。不明なら修正案で停止。
+3. 仮案を保存した場合は保存前後の**成果物SQLと保存ソースが一致**することを再確認し、同じPR #42 `7cdd7ab`のローカルツールで再実行。部分適用16パターン（4テーブルの各有無）、same-name schema drift、旧/新コードと未適用/適用済みschemaの交差条件、DB/Secret未設定、Relay OFF、固定診断、POST owner/CSRFをmock/ローカルで検証し、テスト件数・実行環境・source commitを報告する。別ファイルを作成して過去migrationと衝突させない。
+4. 復旧・承認前提: Hosted migration runnerは公式保証なし。Sites本番公開、D1生成、SQL適用、Secret変更/登録、実Worker通信、実OAuth、家PC操作、追加課金は**実施しない**。成功してもSites初回Deployは別途本人の明示承認が必要。
+
+**次の結果を判断する基準:** 見逃し修正・回帰PASS・4文のlocal rerun検証・実成果物一致・既存固定診断互換・未公開保存コミットの提示。これは**本番の成功条件ではなく、公開候補レビューを再開できる最低条件**。Issue #29の4完成条件は引き続き未達。
+
+## 2026-10-20 Sites保存版6: local replayとschema照合の不具合修正（未公開）
+
+**証拠の境界:** ChatGPT Workからユーザーが転送した報告。通常チャットからSites内部の保存コミット `970c7ea993943a6a77cb2eda85112a230fa10fa9`、migration生成元、ビルド・CI/実行ログは直接読めていない。報告とGitHub readbackを混同せず、実Hosted成功と扱わない。
+
+- **Site状態:** 保存版6 `970c7ea993943a6a77cb2eda85112a230fa10fa9` を**未公開保存**。現公開固定診断Site、Cloudflare Worker、Hosted D1、Secret、OAuth、家PCの実状態はWorkが変更していないと報告。
+- **schema照合修正:** 引用された列名内の空白を保持し、SQLiteの列・制約・主キー・インデックス・外部キーの構造情報を照合。保存版5で不一致を見逃していた回帰が修正前FAIL→修正後PASS。schema不一致でRelay通信0・固定診断HTTP 200をWork mockで確認。
+- **実migration:** 元の4つのCREATEを `IF NOT EXISTS`化。Drizzleのjournal/snapshotは**変更せず**、Drizzle生成によるschema差分なし、sourceとbuild artifactの内容一致をWorkが報告。保存版6の成果物はPR #42 `7cdd7ab`由来の `migration-safety.mjs`で**local-sqlite-only** `verdict:rerun_safe`、`statements:4`、`retryFailsAfter:[]`、`convergeMismatch:[]`、`dataPreserved:true`（テスト専用無関係テーブルの値）と判定。
+- **検証:** Work報告で**53/53 tests PASS**、type/lint/build PASS、4テーブルの存在/欠落全16状態、既存検証行の保持、same-name異schema拒否、Relay初期OFF、DB/Secret未設定、旧固定診断の互換性を確認。実Hosted D1やWebブラウザで行ったテストではない。
+- **未適用である根拠:** 保存候補が未公開、現公開版にD1宣言がなくWork readbackでBinding 0件という**状況証拠のみ**。Hosted側のmigration historyに直接照会できる保証はない。
+- **未解決:** Hosted migration履歴・トランザクション・部分失敗後のretry/repairはOpenAI Supportでも非公開/無保証。 `IF NOT EXISTS`はschema driftを自動修復せず、schema guardの実ブラウザ/Hosted入口への結線・本番稼働は未検証。初回Deploy失敗後に旧コードへ復元してもD1/files/現envは戻らない。Cloudflare Relay `RELAY_SIGNING_KEY`のSites側登録、feature enable、実Worker dummy通信、OAuth、PC Agent E2Eは別ステップ。
+
+### 次の作業は「追加実装」ではなく最終release go/no-go preflight（読み取り専用）
+
+1. **保存版6の正本と現公開版を横に並べる:** 保存コミット `970c7ea`、現公開Version/Deployment IDと環境revision（旧版の当時のenvと混同禁止）、owner限定共有、Hosted Binding/SQL migration適用順、D1/Secret/Relay flagsを読み取り確認。変更なしで固定 `gateway_probe` が現行版の期待応答であることを確認。
+2. **出荷candidateの最後のfail-closed条件:** 新コードがDB/Secret未設定または4表の部分状態なら既存診断を維持してRelayだけOFFになること、Hosted入口がadapterに未結線か接続フラグOFFであること、公開後も意図せぬOAuth開始やWorker外部アクセスが起きないことを成果物から再確認。公開直後に使う匿名化されたhealthy/unhealthy判定方法、即停止条件と旧コード再デプロイ手順を文書化。
+3. **DB残存リスクを明記し残余リスクの受容可否を判断:** Sitesに正式read-only SQL履歴UIがないため、部分適用時の実DB復旧は保証できない。**「安全と証明済み」ではなく、このリスクを承認するかの判断**。Cloudflare/Secret/実Worker/OAuth/PCへの操作は独立承認を維持。
+4. 最終preflight成功時だけ、**ユーザーへSite初回Deploy（D1新規provision/migration/既存固定診断の公開コード差し替えを伴い得る）を実施するか具体的に承認を依頼**する。承認前のDeployment・SQL適用・Secrets登録・現公開版差し替え・実Worker通信は禁止。Site初回DeployとRelay Secret登録/ダミー実通信を一括で自動実施しない。
+5. Preflightを完了しても、**Issue #29の4条件は実機で確認されるまで未達**。Draft PR #42をmainへmergeしない。
+
+**判断:** 保存版6は「mock/local検証済みのpre-deploy candidate」であって、Hosted migrationの成功確認でも全4完成条件の達成でもない。もし正式なrestore動線や使用量制限の重大不明点でfail-closed条件が確定できないなら、公開を保留する。
+
+## 2026-10-20 保存版6初回Deploy: Go/No-Go preflight（推奨・未承認）
+
+**Work本人提供のreadback（GitHubや通常チャットからSitesのHosted管理状態を直接確認したものではない）:**
+
+- 対象のSites**未公開**保存版6: `970c7ea993943a6a77cb2eda85112a230fa10fa9`。Work判断は**「Relay・実OAuth OFFの保存版6の初回Deployを推奨。ただし本人承認前は未実施」**。
+- 現公開版は保存版1の成功deployment。元の公開時**環境revision 0**に対し、現在のSite保存設定は**revision 5**。コード復元が旧環境やSecretsまで戻す根拠はない。
+- 共有: owner 1名、group 0、external viewer 0。公開環境の可視Hosted D1 Binding 0、table 0。非公開migration historyの不存在は確認できない。
+- 保存版6のソース・ローカル保存アーカイブとbuild 69ファイルは一致とWork報告。migrationは4 CREATE 1ファイル、journal `idx:0`、source/artifact一致、**local `rerun_safe`**。53/53ローカルテスト・型・lint・build成功。DB/Secret未設定・partial tables・schema drift時の固定診断維持、Relay fail-closed、実OAuth OFF、Hosted入口のadapter未結線を検証。
+- Plus hostingは現時点でプランに含まれるとのWork/Help確認。ただしユーザー固有の共有quota残量は取得不可。Quota/課金承認画面が出たら自動承認せず**停止**。
+
+**通常チャットで独立した確認:** 本メモ記載時に自作 `Kaito PC Agent Web Bridge.gateway_probe({})` を実行し、`success:true`、`mode:"fixed-diagnostic"`、`pc_connected:false`、`supabase_connected:false`、`approvals_bypassed:false` を観測。これは**現公開Siteのprobeが動く証拠**であり保存版6のHosted稼働証拠ではない。GitHub PR #42は本節追記前HEAD `ee4dc2bcf74e3de50a4980ac612e8ef06b406418`、Draft/Open。
+
+**承認が必要な最初の操作（一括承認しない）:** 保存版6を**既存owner限定Siteへ**正式な `deploy_private_site_version` で初回Deployすることのみ。環境revision 5と、新規D1 provision・4-table migration・コード公開切替が対象になり得る。**Relay/OAuthの有効化、Secret登録、Cloudflare設定変更、Workerへの通信、PC操作、PR mergeは含めない**。
+
+**直後の観測/停止条件（後続タスクとして順守）:** Deploy結果とversion/deployment status、owner-only共有、固定 `gateway_probe` の前後Contract、現行画面のHosted Binding/table readbackを確認。外部公開範囲の変更、予期しないOAuth/Worker通信、固定probeの破損、quota/課金画面、DB/migrationの部分失敗があれば、追加Deploy・DB修復・Secrets操作をせず**停止して報告**。旧コードversion 1の正式再デプロイは原因・環境差分を確認したうえで別判断。**コード復元でDB/filesは戻らない**。D1のrollback/deleteを自動で行わない。
+
+**残余リスクを明示:** Hosted migrationの履歴/atomicity/retryはOpenAI Supportでも保証されず、Hosted DBのread-only SQL確認UIも公開資料で未案内。失敗してもDB変更が残り得る。version復元はコードのみで、旧env/Secret復元までは保証されない。実Hostedの初回Deployと復旧は**未実測**。
+
+**現時点の判定:** `GO for requesting explicit authorization`、**実際のDeploy権限はまだ与えられていない**。第1目標/Issue #29の4受入条件は未達。
+
+## 2026-10-20 Sites保存版6初回Deploy: succeeded / Plugin診断 -32602
+
+**初回Deploy承認後の本人提供Work readback（Sitesの正式デプロイ結果、通常チャットではDeploy画面へ直接アクセスできない）**
+
+- 本人が承認した**1回限り**の `deploy_private_site_version` で保存版6 `970c7ea993943a6a77cb2eda85112a230fa10fa9` をデプロイ。Workが報告したDeployment: `appgdep_6ad775854dd0819189060d485e6b8572`、status **`succeeded`**、environment revision **5**。
+- 公開URL: `https://kaito-pc-agent-web-bridge.kaito2526.chatgpt.site/`。owner 1 / groups 0 / external viewers 0の本人限定共有を維持。
+- Hosted D1: `DB` bindingと想定4テーブルをSites native管理readbackで確認。4テーブルは空。ソース切替・D1 provision/schema適用・環境revisionの反映を実施。Secrets変更、Relay enable、実OAuth、Worker live通信、PC操作、追加課金承認は**していない**。
+- **Post-deploy regression / STOP:** `gateway_probe({})`がJSON-RPC `-32602`、名前・引数検証で拒否。Workは実際の受信リクエストpayload未観測。原因未確定であり成功Deploymentを「Plugin正常稼働」とみなさない。
+- **この通常チャットの独立再現:** 新しい公開版に対してChatGPTの接続済み`mcp__Kaito_PC_Agent_Web_Bridge__gateway_probe({})`を1回実行し、`INVALID_ARGUMENT / McpServerError: Only named diagnostics with empty arguments are allowed`で失敗。利用可能なツール定義は従来どおり`gateway_probe(args: object)`。現キャッシュの呼び出し定義と新サーバー側のtool dispatch/名前検証/arguments検証が一致するかは**仮説**であり、実受信形状・拒否箇所・コードのreadbackが必要。
+- **状態:** 現公開Siteは新コードのまま、固定Plugin診断は**NG**。再Deploy・自動rollback・Hosted DB削除・手動migration・Secret変更・追加修正は行わずSTOP。旧保存版1に正式再Deployできる見込みはあるが、DB/環境revisionを元へ戻す保証はないため**別の復元判断と承認が必要**。
+- **Issue #29判定:** プラットフォームの初回Deployment/D1作成には進捗があるが、実Pluginの通信は現在失敗、Supabase/Agent/screenshot/GUI/Notepad E2Eは全て未検証。4完成条件は未達。
+
+### 次の限定調査（読み取り・ローカルでのmockのみ）
+
+1. 保存版6の公開成果物とMCP受信経路をread-onlyで確認し、**list_tools/schema、公開ツール名、実際にSiteへ届くJSON-RPC method・params.name・argumentsの型と形状**を、Secretや本人情報を記録せずに照合。受信raw payloadが観測できなければそれを明記。
+2. `Only named diagnostics with empty arguments are allowed`を発している実コード行・呼び出し条件・site tool dispatcher境界（Sites platformかアプリ実装か）を特定。公開前後の`gateway_probe`の登録・名前検証・引数処理を比較し、キャッシュ/ツールdiscoveryの可能性も事実と仮説を分ける。局所mockで同じ入力がなぜ拒否されるか再現し、回帰テスト案を作る。
+3. 原因を限定できるまでコードや設定を変更しない。原因が分かったら最小修正候補を**未公開**で準備し、旧`gateway_probe({})`互換性＋Auth/Relay OFF＋owner-only＋DB 4表既存を検証する。公開版への再Deployは**別途本人承認**。
+4. 診断が壊れたままの利用影響を確認し、復元を推奨する場合はversion1のcode-only復元と環境revision5/DB残存の差異を明確にして承認を取る。自動復元はしない。
+
+**更新による上書きに注意:** 直前のGo/No-Go節の「初回Deploy未実施」は**当時のスナップショット**。現在は**Deploy成功・post-deploy固定診断失敗**が最新。
+
+## 2026-10-20 Sites保存版7: MCP tools/call _meta互換修正（未公開）
+
+**Work本人提供の検証報告:** 前段の初回Deployは保存版6 `970c7ea993943a6a77cb2eda85112a230fa10fa9`、Deployment `appgdep_6ad775854dd0819189060d485e6b8572` がsucceededだが、公開後 `gateway_probe({})` は `-32602` / `Only named diagnostics with empty arguments are allowed` で失敗しており、修正前の本番稼働は不完全。
+
+- **新たな未公開保存版7:** `1d10fc907c0330245d9efa0fd531d9bb8de8b8a6`。**本番再Deployしていない**。
+- **根拠のある互換性不具合:** 保存版6の `lib/mcp.mjs` が `tools/call`の `params.name` と `arguments` 以外のプロパティを拒否し、標準の `params._meta` もエラーにしていた。MCP [2025-11-25公式schema.json](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.json) の `CallToolRequestParams` には `_meta`（object、optional）・`name`（必須）・`arguments`（object、optional）がある。**通常チャット側から公式スキーマを独立取得して確認済み**。
+- **Workのローカル比較:** 旧版1・保存版6・未公開版7の空引数 `gateway_probe` は成功。空引数+`_meta` は旧版1成功/保存版6 `-32602`/保存版7成功。非空引数、不明toolは引き続き拒否。修正は`_meta`をobjectとして受理し、認証・引数・通信先には使用しない最小差分との報告。
+- **Work報告のテスト:** 56/56 PASS、typecheck/lint/build PASS、外部実通信禁止テストPASS。実Worker、実OAuth、PC操作なし。D1の4表/migration、Secretsを変更せず、Relay・実OAuth OFF、owner-onlyを維持。
+- **因果関係は未確定:** 現実の失敗したJSON-RPCリクエスト本文は取得できず、`_meta`が付いていたこと自体は仮説。キャッシュや別のパラメータ不一致は排除していない。従って**本番 `gateway_probe` が復旧したとは言わない**。
+- **次の判断:** ユーザーから改めて明示承認を得た場合のみ、既存owner-only Siteに**保存版7だけを正式な `deploy_private_site_version` で1回再Deploy**する。既存D1 Binding/4表、環境revision、共有範囲、schema/SQL適用影響がないことをreadbackし、Deploy statusと接続済み通常ChatGPT `gateway_probe({})` の結果を計測。Probe正常応答にならない/SQL migrate再実行・quota/費用・予期しない設定変更があれば連続再DeployせずSTOP。Secret登録、Relay有効化、Worker live送信、OAuth、PC操作は別承認。
+- **事実/未確認:** GitHubのPR #42は別の管理系。Site保存版7のソース・ログをこの通常チャットから独立取得していない。Hosted runnerの履歴・atomicity・再試行は引き続き保証外。Issue #29の4完成条件は未達。
+
+## 2026-10-20 Sites保存版7: 再Deploy succeeded、固定診断復旧
+
+**Work本人提供のSitesネイティブ管理readback（Deployment/Binding/共有の情報）**
+
+- 既存owner限定Siteへ保存版7 `1d10fc907c0330245d9efa0fd531d9bb8de8b8a6` を、本人の個別承認後に**1回だけ** `deploy_private_site_version`。Deployment ID `appgdep_6ad77b37c0108191af182b13106f4c51` は `succeeded` とWork報告。
+- 公開versionは保存版7。D1は既存の `DB` bindingと4テーブルを保持、migration SQL前回と同一。共有owner 1名のみ、group 0、外部共有0。環境revision 5を保持。
+- Relay・実OAuth OFF。Secret変更、Cloudflare Worker実通信、PC操作、課金操作は未実施。ローカル修正内容は標準MCP `tools/call`の `params._meta` objectを無害なメタデータとして受け入れる対応で、Workで56/56のテスト成功を報告。
+- **公開後の固定 `gateway_probe({})` はWork報告で `success:true` を確認。通常ChatGPTでもこの記録時に自作Plugin `mcp__Kaito_PC_Agent_Web_Bridge__gateway_probe({})` を独立に実行し、次のJSONを取得: `{"success":true,"bridge":"Kaito PC Agent Web Bridge","version":"0.1.0","mode":"fixed-diagnostic","transport":"chatgpt-sites-mcp","pc_connected":false,"supabase_connected":false,"approvals_bypassed":false}`。以前の `INVALID_ARGUMENT / Only named diagnostics with empty arguments are allowed` は本独立実行で再現せず。
+- **証拠の区別:** 通常チャットはPlugin tool応答を独立に確認したが、Sites管理のDeployment/DB/owner-readbackとSiteソースCommitには直接アクセスしていない。旧障害の実受信JSON-RPC `_meta`の有無も未観測のため、`_meta`が本番失敗の唯一の根本原因であったとの断定はしない。
+
+### 次段階のRelease gate: dummy Sites → Cloudflare Worker通信
+
+**現在のPlugin成功は固定diagnostic応答に限る**。Supabase Gateway/家PCの`ping`、screen capture、mouse/keyboard/scroll、Remote Desktop Commander OFF時のメモ帳E2Eは**すべて未達**。実Worker通信、実OAuth/Secretsも未実施。
+
+次はSites version7（owner-only、Relay/OAuth OFF）とPR #42のCloudflare dummy relay構成/既存Worker設定について、**read-only**のsource/artifact/current-hosting readbackを照合する。確認事項: Site側Relay adapterのHosted入口との配線、署名鍵の安全な同一値持込み方法、Worker active Versionとallowlisted origin、本人POST/CSRF、D1 bindingと既存データ非破壊、Cloudflare Free / Sites使用枠。Cloudflare Workerとのdummy実通信に必要な変更だけ最小化し、**実送信・Secret登録・Relay enable・Worker Deploy・課金・OAuth・家PC操作は別々の本人承認まで禁止**。
+
+実際の`gateway_probe`が正常な間は、理由のないSite再Deployやローカルテスト追加を止め、エンドツーエンド経路の阻害要因の特定へ進む。PR #42はDraft維持。
+
+## 2026-10-21 Claudeレビュー: 保存版8のGET/POST確認項目と、中継の必要性の検証（読み取りのみ・認証方式は未変更）
+
+**証拠の区別:** 保存版8 `307a341b…` のソースはGitHubに無く、Claudeは取得できていない。以下の「確認項目」はWorkで見る箇所の指定であり、保存版8の成否判定ではない。認証方式は変更していない。
+
+### A. `sites-client.mjs` のGET/POST不一致（確認済みの食い違い、影響は未確認）
+- GitHubの基準コード `gateway/cloudflare-callback-relay/src/sites-client.mjs` の `checkRoute` は、`complete` を **GET** `/connect/complete` として検証し、同じ呼び出し内で `consumePending` → 署名付き `/claim` を行う。つまり**状態変更GET**（本文書§1-7が指摘したCSRF懸念そのもの）。
+- Work報告（保存版4以降）は「GETは表示のみ、本人/Cookie/Origin/CSRF付きPOSTで消費・claim」。基準コードとSiteの実装が**食い違っている**。基準コードを保存版8がそのまま取り込んでいると、(1) POSTは `method_not_allowed` で拒否される、または (2) GETを許して状態変更GETが復活する、のどちらかになる。
+- **Workで見る箇所（保存版8）:** ①アダプターが `checkRoute` 相当を持つか／メソッド制約が `complete` でPOSTか。②GET `/connect/complete` ハンドラが `consumePending`・`/claim` を呼ばないこと（表示のみ）。③POSTが `x-oauth-csrf` を `pending.csrf` と比較していること（`prepare` は比較するが、基準コードの `complete` は比較しない）。④`Origin` が `SITE_ORIGIN` 固定であること（`null` は許さない）。⑤POST後の遷移がquery無しの303であること。⑥基準コードを直す場合は `tests/sites-client.test.mjs` の `complete` 系テストをPOST+CSRF前提に更新。
+- Claudeは、保存版8を確認できないため基準コードを書き換えていない（Site側と二重に食い違うのを避ける）。
+
+### B. Cloudflare中継は第1目標に本当に必要か
+**確認済みの事実**
+- 中継の動機は、Siteの `/oauth/callback?code=…&state=…` がSites管理のログに残る保証が無いこと（保存版2を停止した理由）。
+- Sitesの公式資料（learn.chatgpt.com/docs/sites）は、HTTP/HTTPS/WebSocketの**外向き通信を明記**している。Siteから `*.workers.dev` へのHTTPSは原理的に可能（実測は未了）。
+- Sitesの「アプリ/Pluginの接続」はプラットフォーム管理で、訪問者のChatGPT接続を使う機能。公式資料は**ワークスペース内のSiteであること、Plugin利用の有効化**を条件に挙げ、サーバー側から既存Gatewayを呼ぶ方法は記載していない。本Siteの `sites_list_plugin_eligibility` は提供されず**未判定**（`issue-29-chrome-plugin.md`）。個人アカウントで使えると仮定しない。
+- 既存の認証済みGateway（`oauth-pc-agent`）は `withSupabase({auth:"user"})` と許可ユーザー照合でSupabaseのユーザートークンを要求する。Siteがトークンを得る手段は現状OAuth（Site内実装）のみ。
+
+**仮説（未検証）**
+1. PKCE S256ではcode単体はトークンに交換できない（verifierはSite内のみ）。codeがSitesログに残るだけでは悪用しにくい可能性があり、中継の防御価値は想定より小さいかもしれない。ただしSupabase OAuthサーバーが当該クライアントでPKCEを必須にしているかは未確認。
+2. Siteから既存Gatewayへ到達する別経路（Site固有の署名付き要求など）は構造を大きく単純化し得るが、長期共有秘密という別のリスクを持ち、以前は不採用とされた。**検証前に変更しない。**
+
+**結論（現時点）:** 中継は「Sitesがログ保証なしのままSupabase OAuthのcodeを受ける」設計の前提では必要。ただし第1目標（PC側の画面取得・GUI操作）の達成には直接必要ではない。PC側は既存のデスクトップ限定Plugin経由でも独立に検証でき、Web経路（Sites）は伝送路の問題として分離して進められる。→ [PC側の完成度](issue-29-pc-side-readiness.md)（`feat/capture-click-geometry`）。
+
+### C. 次の最小検証（承認が必要な操作は含まない）
+1. Work: 上記A①〜⑥を保存版8のソースで読み取り、結果を記録。
+2. 本人: 新しい署名鍵はSites Hosted SecretsのUIとWorkerの両方へ本人が直接投入（チャットへ出さない）。実Worker送信は別承認。
+3. 外向き通信の実測は、署名なしの `/prepare` が `401 authentication_required` を返す（D1書込みなし）ことの確認が最小。署名鍵の登録より先にSiteの外向きHTTPSが通るかを切り分けられる。
+
+## 2026-10-25: GitHub Relay adapter GET state-mutation mismatch corrected (source-only)
+
+**Previous confirmed finding (§7 and 2026-10-21 Claude review):** The reference `gateway/cloudflare-callback-relay/src/sites-client.mjs` originally accepted a GET `/connect/complete` and then consumed `pending` + requested `/claim`; moreover it allowed a missing `Origin` on GET and did not check the completion CSRF token. Those findings describe **past code**, not the updated PR #42 branch.
+
+**Corrected on PR #42:** The reference `complete(request)` now accepts only POST with exact `SITE_ORIGIN` and an exact match of `x-oauth-csrf` to trusted server-side `pending.csrf` **before any `consumePending`**. Missing Origin, cross-origin requests, missing/wrong CSRF and GET are rejected without consuming pending, performing a Worker `/claim` or exchanging any code. The `prepare(request)` route remains same-origin POST + CSRF. The Worker dummy callback continues returning a query-free 303 to Sites `GET /connect/complete`; **the Sites hosted GET handler must remain a separate display-only endpoint**. It must not call the updated `complete()` or mutate pending; the browser's authenticated POST follows only with Origin + CSRF.
+
+Updated `gateway/cloudflare-callback-relay/tests/sites-client.test.mjs` to POST for the legitimate flow and added direct tests proving GET non-mutation, pending preservation on invalid Origin/CSRF, and successful legitimate completion after rejection. Cloudflare dummy CI passed at [40106862549](https://github.com/EliteMay/pc-agent/actions/runs/40106862549) with tests, checks and artifact dry-run. **Source and offline mocks only**, not proof of Site saved version 10's runtime wiring, authenticated browser identity, live callback logging, or client-ID compatibility. No GitHub merge, Site/Worker deploy, OAuth/Relay enabling, Cloudflare/DB/Secrets or PC command changes.
+
+**Release gates still BLOCKED:** direct Site Source v10 vs adapter method wiring/readback, actual OAuth client ID equality, callback log protection, explicit legacy compatibility decision and a separately authorized production deployment all remain unresolved.
+
+## 2026-10-25: ログリスク許容と未証明・未承認の境界を再整理（本番変更なし）
+
+**既存の本人判断を再確認:** 本PRの `docs/issue-29-cloudflare-live-dummy-verification.md` は2026-10-15に、Cloudflare内部/edgeの非可視ログ・ブラウザ履歴・Sites POST bodyログの**残留リスクを、PKCE + confidential OAuth client + 単回コード + 約300秒の期限等の緩和込みで本人が許容した**と明記している。この既決判断を忘れて「全ログ層の非保存が完全証明されるまで設計作業すら停止」と誤読しないこと。
+
+**ただし、許容と実証・実行承認は別:**
+- 観測可能な設定は`observability`無効/`logpush`無効等の範囲であり、Cloudflare内部/CDNログ・ブラウザ履歴・Sites POST bodyの非保持は**今も未証明**。未証明部分を`verified`やゼロリスクとは表示しない。
+- 2026-10-15の許容判断は**実OAuthをONにする承認ではない**。confidential登録の実Site SecretとのID一致、正しいredirect URI、実PKCE、本人/Cookie/CSRF/Origin境界、Gateway client_id制限、旧Plugin互換性、Site保存版10のGET/POST実装整合、復旧手順が依然ゲート。
+- 今のPR #42 Workerコードはdummy-onlyで実OAuth codeを受け取らない。`live_oauth_allowed:false`を変更したり、現Workerへ実Codeを送らない。
+- 現チャットから正式Sites保存版10のサーバー側ソース取得機能は公開されていない。LibraryにはSite公開用説明文とバージョンメタデータのみ。これらをHostedコード一致確認の代用としない。本人認証済みSites管理の`get_site_version`相当の正式読取で、保存版10のGET表示専用ルートとPOST consume/claim、Origin/CSRF検証の有無をファイル・行単位で照合する必要がある。
+- 既存GitHub `sites-client.mjs`は2026-10-25修正済みでPOST専用。反映済みSiteを推測せず、**このGitHubコードをSitesへそのままコピペ・自動Deployしない**。
+
+**現時点の判定:** リスク受容の再審議や追加Cloudflareサービス導入は不要。ただしSite実ソース照合とクライアントID同一性が未証明のため **BLOCK DEPLOY / OAuth OFF** を維持する。必要な実環境変更は本人による対象別の明示承認後だけ。
+
+## 2026-10-25: 実OAuthは設定だけでは起動できない（source構造の確認）
+
+最新PR #42の`gateway/cloudflare-callback-relay/src/worker.mjs`、`src/protocol.mjs`、`src/sites-client.mjs`を再確認した結果:
+
+1. Workerの`configuration()`は`RELAY_MODE !== 'dummy'`を`setup_required`として拒否する。現在の`callbackPayload()`とclaim検証は`dummyCode`しか認めない。
+2. `protocol.mjs`に将来のための`oauthCode`正規表現は存在するが、Workerの本処理では使われていない。
+3. Sites参照Adapterは`exchangeDummy`のみ呼び、`mode:'dummy'`以外のprepare応答と、非ダミーcodeのclaim結果を拒否する。
+4. したがって**Cloudflareの環境変数だけをliveへ切り替えることは解決策にならない**。実OAuthのコードを受け入れて安全に渡すlive処理と、Site側のPKCE交換までを互換設計・実装・検証する必要がある。
+
+**安全な実装順:** 保存版10の本人認証済み正式source readbackで、GET表示とPOST消費、PKCE/verifier、redirect_uri、token交換ハンドラを行単位で確認する。その実コードに合わせ、既存Workerとadapterへ`dummy`の既存動作を壊さない明示的な`live`モードを**ソース上だけ**追加し、ライブモードがデフォルトOFF/SecretなしOFF/未登録callback OFFでfail-closedになるテストを用意する。認可コードはログ・Issue・テスト出力に出さず、署名・本人/ブラウザbinding・一回限りclaim・TTL・固定Origin/redirect・POST+CSRFを維持する。Site OAuth Client ID/legacy互換性、正式callback登録、PKCEとconfidentialの実条件、復旧ゲート、本人の個別変更承認が満たされるまで**デプロイも実認可コード発行もしない**。
+
+この段落は実装条件の更新であり、上記live処理を完成したと主張するものではない。既存dummy-onlyデプロイと未公開PR #42は維持する。
+
+## 2026-10-25: WorkerとSites参照Adapterにgated live OAuthコード経路を実装（ソースのみ）
+
+**最新実装:** [PR #42](https://github.com/EliteMay/pc-agent/pull/42) の `src/worker.mjs` / `src/sites-client.mjs` / `src/protocol.mjs` に、既存dummyモードを維持したままlive用コード受信→AES-GCM封印→D1一回限りclaim→Siteサーバーの`exchangeOAuthCode`callbackへの受け渡しを追加した。
+
+- Workerは`RELAY_MODE=live`と`RELAY_LIVE_ENABLED=true`（文字列）の**両方**が必要（初期値・現在本番値は変更なし）。Siteは`mode='live'`, `liveEnabled=true`とserver-only`exchangeOAuthCode`が必要。
+- Liveとdummyは異なる`state_hash`名前空間とAES-GCM AADを使うため、同じstateを用いても別モードのprepared/ready行を消費できない。D1 schema変更なし、旧dummy側は従来Hash/AAD維持。
+- 既存の署名/owner+browser binding・POST+Origin/CSRF・期限・一回限りclaim・fixed 303・no query/log code・dummy code拒否/実コードの有界検証を維持。実OAuthの値や実ネットワーク通信を使うテストは未実施。
+- [Relay CI 40108825815](https://github.com/EliteMay/pc-agent/actions/runs/40108825815): 80/80 PASS, Node check, Wrangler **dry-run** artifact。 [Gateway CI 40108825799](https://github.com/EliteMay/pc-agent/actions/runs/40108825799): PASS。現配信Workerとのバイナリ同一性やSite本番への結線を証明するものではない。
+
+**残りの本当の実装と運用ゲート:** 保存版10の正式なサーバーソースreadbackで実PKCE token交換処理とGET表示専用／POST consume+claimを確認した上で、参照`createSitesRelayClient({mode:'live', liveEnabled:true, exchangeOAuthCode})`を既存Hosted入口へ統合する必要がある。Worker固定`/oauth/callback`がSupabase登録・認可開始・Site pending・token交換のredirect URIとして一致することが必要（現在の登録はSite callbackでありそのままでは一致しない）。Cloudflareの現配信コード/設定・本人所有権・callbackログ残留リスク・Gateway PR #47・旧Plugin権限・復元可能性と別途本人承認が確定するまで実OAuth/Relay有効化・Supabase OAuth登録変更・本番Deployは禁止。
+
+**判定:** **GO for source-only development validation**, **NO-GO for production deployment, actual OAuth issuance, and PC commands**。Issue #29の4条件は未達。
+
+## 2026-10-25 実DBで確定したOAuth redirect不一致（**NO-GO**、読み取り専用）
+
+**確認方法:** Supabase `auth.oauth_clients` と `auth.oauth_consents` で、client ID・client secret・ユーザーID・アクセストークン・生redirect listを表示しない**集計SELECTのみ**を実行。Cloudflare/Sites/Gateway/DBの書き換えやOAuth開始はしない。
+
+| auth.oauth_clients分類 | 登録数 | 登録済みredirectの分類 | 同意記録 |
+|---|---:|---|---:|
+| confidential | 1 | Site既存`https://kaito-pc-agent-web-bridge.kaito2526.chatgpt.site/oauth/callback`が1件、一方で**Workerのcallback一致0件** | **0** |
+| public | 2 | localhost/loopback 2件、Workerのcallback一致0件 | **2** |
+
+**重大な事実:** 未公開PR #42の`src/worker.mjs`は、実OAuth codeを `https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev/oauth/callback` で受け取り、`src/sites-client.mjs`は同じ `redirect_uri` でconfidential client + PKCEコード交換する構成。現在のSupabase confidential登録にはこの**完全一致URIが存在しない**。従って、今の設定のまま `RELAY_MODE=live` やSite `liveEnabled=true` を有効化しても、**このRelay経由の実OAuthは正常完走できない**。
+
+Supabaseの公式ドキュメント「[Getting Started with OAuth 2.1 Server](https://supabase.com/docs/guides/auth/oauth-server/getting-started)」は、OAuth clientのredirect URIは**wildcard不可・完全URL一致のみ**と明記し、複数URIの登録をサポート。Site内の通常Sign-in redirect URL設定とは**異なる**ため混同しない。
+
+### この不一致の安全な解消案（現時点では**実行禁止**）
+
+1. まず正式なSites version 10のsource readbackで、現行のconfidential client IDと実Site server側のClient IDを**非公開の等値照合**。Site auth session、本人/Cookie/Origin/CSRF、PKCE発行/交換、`GET /connect/complete`表示のみの実装を確認。`auth.oauth_clients`に1件あるSite callback URLだけではClient ID同一性の証明にならない。
+2. 既存のSite callbackを**削除・置換しない**。本人がSupabase OAuth登録変更を明示承認した場合にだけ、同じ既存confidential clientの登録redirect URIへ正確な`https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev/oauth/callback`を**追加**する。新しいサービスや不要なOAuthクライアントを増やさない。登録API/公式Dashboardで登録完了をreadbackし、現Site callbackとWorker callback両方の完全一致を**機密値なしの集計で検証**。
+3. その後にauthorize request、Sites pending.redirectUri、Worker固定callback、`exchangeOAuthCode`のtoken exchange `redirect_uri`を同じWorker URIへ統一した**未公開**実装を検査。confidential secret/PKCEは既存serverのみ。Workerへsecret/access/refresh tokenは送らない。
+4. さらにPR #47のGateway client_id権限・旧Plugin互換性、Cloudflare現稼働Artifact、Sites保存版10との結線、ロールバック、本人個別Deploy承認を確認してから、最初はPCコマンド無しのauth/relay診断のみ実測する。
+
+**現状:** **BLOCK DEPLOY / BLOCK LIVE OAUTH / PC COMMAND未実施**。既存の本人による残留ログリスク許容は維持するが、それはredirect登録・実OAuth開始・本番変更の承認ではない。PR #42/#47はDraft。ダミーのCI成功・ソース追加は実OAuth成功の証拠ではない。
