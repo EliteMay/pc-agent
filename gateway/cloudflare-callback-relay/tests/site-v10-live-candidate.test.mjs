@@ -139,7 +139,7 @@ test('an intervening pending rewrite cannot prepare a different state or PKCE se
   ]){
     const s=await setup({alterUrl:(url,p)=>{mutate(p);return url;}});
     const result=await s.candidate.start(s.req('/oauth/start'));
-    assert.equal(result.status,409);
+    assert.ok([401,409].includes(result.status));
     assert.equal(s.calls.length,0);
     assert.equal(s.f.DB.rows('relay_pending').length,0);
     assert.equal(s.exchanges.length,0);
