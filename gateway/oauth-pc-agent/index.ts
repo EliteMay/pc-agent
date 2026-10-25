@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { pipeline } from "npm:@supabase/middleware@^0.5.0";
 import { withOAuthProtectedResource, withSupabase } from "npm:@supabase/server@^1.6.0";
+import { clientCapabilities, consistentJwtUserId, isToolAllowed, resolveClientPolicy, visibleTools } from "./client-policy.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const AUTH_ISSUER = SUPABASE_URL + "/auth/v1";
@@ -411,7 +412,7 @@ function mcpError(id: unknown, code: number, message: string) {
 }
 
 async function isAllowedUser(ctx: any) {
-  const userId = ctx?.userClaims?.id;
+  const userId = consistentJwtUserId(ctx?.userClaims, ctx?.jwtClaims);
   if (!userId) return false;
 
   const { data, error } = await ctx.supabaseAdmin
@@ -1006,14 +1007,23 @@ const handler = async (req: Request, ctx: any) => {
     }, 403);
   }
 
+  // This policy uses verified JWT claims, not request headers or RPC arguments.
+  // Missing client ID or missing deployment configuration fails closed.
+  const clientPolicy = resolveClientPolicy(ctx?.jwtClaims, {
+    siteClientId: Deno.env.get("KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID"),
+    mcpProbeClientIds: Deno.env.get("KAITO_PC_AGENT_MCP_PROBE_OAUTH_CLIENT_IDS") ?? "",
+    privilegedClientIds: Deno.env.get("KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS") ?? "",
+  });
+  if (clientPolicy === "deny") {
+    return json({ error: "forbidden", message: "This OAuth client is not authorized." }, 403);
+  }
+
   if (req.method === "GET") {
     return json({
       service: "pc-agent-oauth",
       version: VERSION,
       oauth: true,
-      readOnly: false,
-      safeWrite: true,
-      orchestration: true,
+      ...clientCapabilities(clientPolicy),
       authenticated: true,
     });
   }
@@ -1061,7 +1071,7 @@ const handler = async (req: Request, ctx: any) => {
     return json({
       jsonrpc: "2.0",
       id: body.id ?? null,
-      result: { tools: TOOLS },
+      result: { tools: visibleTools(TOOLS, clientPolicy) },
     });
   }
 
@@ -1085,13 +1095,21 @@ const handler = async (req: Request, ctx: any) => {
     const name = String(body?.params?.name ?? "");
     const args = body?.params?.arguments ?? {};
 
+    // Execute the gate before task orchestration, device queue or sensitive tools.
+    if (!isToolAllowed(clientPolicy, name)) {
+      return mcpResult(body.id, {
+        success: false,
+        errorCode: "tool_not_allowed",
+        message: "This OAuth client cannot call that PC tool.",
+        retryable: false,
+      }, true);
+    }
+
     if (name === "gateway_probe") {
       return mcpResult(body.id, {
         success: true,
         authenticated: true,
-        readOnly: false,
-        safeWrite: true,
-        orchestration: true,
+        ...clientCapabilities(clientPolicy),
         gateway: "supabase-oauth",
         service: "pc-agent-oauth",
         version: VERSION,

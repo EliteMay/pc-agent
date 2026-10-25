@@ -1,0 +1,190 @@
+# Issue #29: OAuth client-scoped Gateway tool policy (draft, NOT deployed)
+
+This is a **source-only** change for the existing `kaito-pc-agent-oauth-readonly` Supabase Edge Function. It does not change Sites, Cloudflare, database data, OAuth registrations, devices, production settings or tokens.
+
+## Rationale / trust boundary
+
+The verified `ctx.jwtClaims.client_id` from `withSupabase({auth:"user"})` is used **after** the existing owner-user check. It is NOT read from HTTP headers, MCP tool input, `ctx.userClaims`, or caller-provided JSON. Supabase OAuth Server documents that its JWT access tokens include `client_id`; `@supabase/server` documents `ctx.jwtClaims` as the verified raw JWT claims.
+
+- `KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID`: the **one exact** OAuth client ID that Sites uses for the Supabase OAuth flow. **Do not guess this value.** Configure only after reading its registered client ID from the legitimate OAuth management interface.
+- `KAITO_PC_AGENT_MCP_PROBE_OAUTH_CLIENT_IDS`: optional comma-separated allowlist of **other, individually confirmed ChatGPT MCP OAuth client IDs**, limited to the exact same `gateway_probe`-only capabilities as the Site client. The default empty string authorizes no extra client. Never guess a DCR-generated ID, and never add a Codex or legacy client automatically.
+- `KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS`: optional comma-separated allowlist of **other** explicitly approved OAuth client IDs for the existing full Gateway capabilities. An empty string means no privileged clients. Never add the Site ID or a probe-only MCP ID to this list.
+- If the Site ID setting is absent/malformed, the claim is absent/malformed, either CSV list is malformed/duplicated, or the Site/probe/privileged lists overlap, **all** OAuth clients are rejected (403). The code must **not** be deployed without evaluating this compatibility consequence first.
+- **Current milestone**: Site client is limited to **`gateway_probe` only**. It cannot call `relay_ping` or queue even a read-only PC `ping`; it has no tool access to files, GUI, tasks or orchestration. Both `tools/list` and `tools/call` enforce the same policy before any device/queue dispatch.
+- Only explicitly allowlisted different OAuth clients retain full existing Gateway capabilities. Unknown/unregistered clients default to deny. The existing user UUID allowlist check remains required for everyone.
+- This is a Gateway defense-in-depth control: it **does not** establish the authenticity of Sites identity headers or browser/MCP same-user matching. A malicious actor with an actual allowlisted privileged client's valid bearer token remains subject to that token's capabilities, so protecting/token-revoking those tokens remains important.
+
+## Mandatory tests and review before a separate deployment approval
+
+1. `node --test tests/oauth-client-policy.test.mjs` passes, including absent/duplicate/malformed configs, spoofed headers, Site restrictions, `task_step` denial, and dispatch guard placement.
+2. `deno check gateway/oauth-pc-agent/index.ts gateway/pc-agent-device/index.ts` passes in Gateway CI.
+3. Confirm that the planned Site client ID is **actually** in a verified Supabase token's `client_id` claim or official OAuth client registration. Do not log/print full JWT or identity data. No live bearer token test in this source-only PR.
+4. Before any production rollout, identify whether other current OAuth clients need full functionality, confirm their **exact** IDs through official administration, and explicitly decide whether to allowlist them; avoid locking out the existing plugin unexpectedly.
+5. For an eventual approval-gated rollout, configure both variables through the supported Supabase secrets/environment management interface, preserving current settings. Verify rollback, readback (names/flags only), Site tool list and direct denied `tools/call` with authorized safe test identities. **Never** confuse a mock test with actual JWT / Gateway E2E verification.
+6. OAuth/Relay remain OFF; Sites production saved version 10 is unchanged. No PC ping or other command is sent by this PR. Do not enable OAuth before the separate Sites impersonation/relay security release gates are satisfied.
+
+## Reference
+
+- Supabase OAuth token security: https://supabase.com/docs/guides/auth/oauth-server/token-security
+- Supabase server auth modes (`jwtClaims`): https://github.com/supabase/server/blob/main/docs/auth-modes.md
+- Goal and release gate: Issue #29 and PR #42.
+
+## 2026-10-24 independent second-pass compatibility audit (read-only evidence)
+
+The following observations were obtained via read-only Supabase auth catalog queries and the official connected Plugin Creator metadata. **This review did not authenticate using OAuth, and it did not read or print OAuth client IDs, secrets, bearer tokens or other identity values.**
+
+| Evidence | Result | Interpretation / limit |
+| --- | --- | --- |
+| `auth.oauth_clients` aggregate | 3 registered (2 public, 1 confidential) | Registration is not evidence of a working token or active session. |
+| Callback categories | 1 client has a `chatgpt.site` redirect; 0 have a `workers.dev` redirect | One confidential registration is a **candidate** for the Site's OAuth flow; identity and runtime behavior remain unverified. Cloudflare callback registration is still missing. |
+| Private legacy Plugin `kaito-pc-agent-oauth-readonly-v2` v0.3.0 | Manifest has `mcp.json` / `.mcp.json` and direct Supabase URL | It is distinct from the Sites Chrome plugin; don't assume they share an OAuth client ID. |
+| Private Sites Plugin (v1.0.0) | Site-backed, fixed diagnostic; Supabase/PC link not active | Its existing successful `gateway_probe` does **not** demonstrate a signed Supabase client token. |
+| Active Supabase OAuth Edge Function | v15 source matched the current GitHub `main` before this PR | PR code is **not deployed** and does not yet gate any live request. |
+| GitHub Gateway CI on PR #47 initial head | Node policy test and `deno check` succeeded after TS type fix | CI success is not authenticated integration or deployment verification. |
+
+### Compatibility decision: BLOCK DEPLOY, not a design rejection
+
+- **Site client registration must be uniquely attributed**, using the official OAuth registration and Site's saved OAuth client configuration, not merely matching a redirect domain. Keep the actual ID out of the public repository, issue comments and logs.
+- **Do not automatically grant privileged capabilities to both existing public OAuth registrations.** First prove which (if any) belongs to the prior private Plugin, what operations must remain supported, and whether an actual valid token contains a matching `client_id`. An unidentified client stays denied.
+- **Do not deploy without configuring the exact approved identifiers.** With no `KAITO_PC_AGENT_SITE_OAUTH_CLIENT_ID`, all authenticated Gateway clients fail closed; this is a known potential legacy Plugin regression, not a rollout-ready release.
+- The Site client cap to **`gateway_probe` alone** is **stage 1 only**. To meet Issue #29, the later capture/GUI phases require deliberately scoped escalation with separate local approvals and fresh security tests; simply removing this deny gate would undo the defense.
+- The Cloudflare callback redirect is not in the observed OAuth registry. **Never** bypass the existing callback/log/Relay gate by silently switching to a direct Site callback.
+- The Sites header overwrite and browser/MCP owner identity are still unverified. `client_id` authorization is defense in depth, not proof of either.
+
+### Remaining approval-gated live validation
+
+1. Confirm exact Site and legacy OAuth client registrations through official management readback without exposing values. Do not assign any unknown client full capabilities.
+2. On a safe test token, confirm only **boolean** checks that the verified JWT claim exists and matches the intended client, without revealing the token or claim.
+3. In a separately approved deployment only, assert `tools/list` is reduced for the Site client and that direct `tools/call` for `task_step`, `capture_notepad` and `notepad_gui` is rejected before queue creation. The approved legacy client's existing function must remain intact.
+4. Confirm rollback/readback and local approval controls. Do not send PC commands in this audit or enable OAuth/Relay.
+
+## 2026-10-24 exact Sites callback URL matching (read-only)
+
+An additional read-only query against `auth.oauth_clients` tested only aggregate booleans against the **exact currently published Site host** (no client ID, token, redirect URI list, or secret was read into the public report):
+
+- **Exactly 1 confidential OAuth client** has a registered redirect URI containing `kaito-pc-agent-web-bridge.kaito2526.chatgpt.site`.
+- **0 public clients** have a registered redirect URI containing that hostname.
+- **0 clients** have a registered `workers.dev` redirect URI.
+
+This narrows the likely Sites OAuth registration to one record, **but is not proof that deployed Sites saved-v10 actually uses its `client_id`**. This chat's available management tools expose only the connected Site plugin wrapper and a fixed probe, not the hosted Site source or secure configuration readback. Comparing the Site's actual OAuth client setting to the registration must take place via its formal Site management interface. Avoid posting raw client IDs into public GitHub logs/issues.
+
+Release decision unchanged: **Draft only, no deploy, no OAuth/Relay activation, no PC actions**.
+
+## 2026-10-24 OAuth consent compatibility evidence and Site access boundary
+
+Read-only `auth.oauth_clients` / `auth.oauth_consents` aggregates, with **no raw client IDs, consent user IDs or credentials output**:
+
+| Client group | Registered clients | Recorded consent rows |
+| --- | ---: | ---: |
+| Confidential, exact Sites callback hostname match | 1 | 0 |
+| Public, no Sites callback match | 2 | 2 |
+
+**Interpretation:** Zero consent records for the candidate do not prove no token was ever issued, and existing public-client consent records do not prove current sessions or tokens are valid. However they provide a concrete **legacy compatibility regression risk**: deploying fail-closed PR #47 with only the Site client configured could cut off authorized previous Plugin workflows. Do not infer consent->plugin mapping without authoritative client configuration.
+
+Connected private Plugin Creator metadata confirmed the Sites bridge plugin is only a fixed diagnostic wrapper; its manifest contains no OAuth client ID. The owned legacy Private Plugin's `mcp.json`/.mcp.json connect directly to Supabase, but also do not identify the OAuth client registration with sufficient certainty. The available browser tab reader refused access under host security policy; that restriction must **not** be bypassed or replaced with CDP/raw navigation. The Library's Site artifact metadata currently reports `source_version_number=10` but does not expose hosted Site source or server-side secrets/settings.
+
+**Action once formal Sites management is available:** compare the actual OAuth client ID in the saved-v10 server-only configuration against the one and only Supabase confidential client with the exact Sites callback host. Perform the comparison privately in that management session and publish only `match/mismatch/missing`, without copying IDs or tokens into GitHub or chat. If no formal readback exists, leave `unverified` rather than inferring a match.
+
+For each legacy client, separately assess current consent/registration and the minimal capabilities required before configuring `KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS`. Do not automatically grant both public clients full access.
+
+## 2026-10-24 source-only bootstrap readiness follow-up
+
+- The available past non-public registration history confirms that a dedicated **confidential** Sites OAuth client was registered on **2026-10-09** and its ID was entered into Hosted Secrets without revealing values to chat/GitHub. However no independent, retrievable value-equality receipt or legacy Plugin registration map was found in past conversation summaries or accessible private Library records. Therefore **the current masked Secret-to-client ID match remains unverified**; avoid repetitive secret readback requests.
+- Read-only Supabase device table aggregate showed **one paired device**, `agent_version=0.11.6`, with a recent `last_seen_at` on **2026-10-24** and a heartbeat within 10 minutes of the query. This confirms only the Windows Agent → Supabase heartbeat path at that instant, not ChatGPT → Sites → Gateway → Agent authenticated command round trip. No PC command was sent or queued.
+- Independent review found a misleading capability claim in the draft's `gateway_probe` response: the original gateway continued to report `safeWrite:true` / `orchestration:true` even when the Site client had only three read-only/bootstrap tools. Both authenticated GET metadata and MCP `gateway_probe` now use the same `clientCapabilities(clientPolicy)` helper. The Site client reports `readOnly:true`, `safeWrite:false`, `orchestration:false`, while explicitly privileged legacy clients retain their prior flags. Added a regression test.
+- Until a separate production release and client ID verification, the updated draft source has no effect on the running Supabase gateway. Sites saved version 10, Cloudflare relay, OAuth flags, secrets, DB schema and PC action state have not been modified.
+
+## 2026-10-24 offline Site-to-Agent bootstrap contract test
+
+As a separate **non-network** readiness check, `agent/test/goal29-site-bootstrap.test.js` now combines:
+1. The real `resolveClientPolicy` / `isToolAllowed` / `visibleTools` policy helpers in this PR.
+2. The existing `runQueueOnce` and `createPingTool` from the genuine local Agent.
+3. A fully in-memory command envelope / fake queue transport, and an in-memory operation journal.
+
+Four assertions cover an approved Sites OAuth client returning `pong` from the Agent runner, rejection of screenshot/GUI/write/task tools **before enqueue**, denial of spoofed headers lacking a verified JWT `client_id`, and the three-name bootstrap `tools/list` contract.
+
+**Evidence:** Agent CI (Windows) run [40099238639](https://github.com/EliteMay/pc-agent/actions/runs/40099238639) succeeded; Gateway CI run [40099242882](https://github.com/EliteMay/pc-agent/actions/runs/40099242882) succeeded. The run creates **no** Supabase command or external request. It is deliberately not counted as a genuine ChatGPT → Sites → authenticated Gateway → Windows PC end-to-end test.
+
+**Read-only live inventory only:** the paired PC Agent's heartbeat to Supabase was fresh at the time of inspection; historical `kaito_pc_commands` aggregates showed 8 completed `ping` and 2 completed `notepad_gui` records in the previous 30 days (latest on 2026-10-08). These historical records are not attributable to a successful *current* ChatGPT Sites integration and should not close Issue #29.
+
+Release gate unchanged: confirm exact OAuth client ownership and legacy compatibility, keep Sites/Relay OAuth OFF, do not deploy this draft or send a PC command without separate authorization.
+
+## 2026-10-24 pre-rollout endpoint isolation check (read-only)
+
+Using read-only queries with **no client IDs, URL values, secrets or JWTs returned**, we classified the three OAuth registrations more precisely:
+
+- 2 **public** registrations from 2026-10-06: both have the registered name **`Codex`** and **loopback** callback addresses. Each has 1 unrevoked consent (total 2). They are **not evidence** of an authenticated Sites/ChatGPT MCP connection, and their legacy PC Agent plugin use is unproven. This was established by a later read-only SQL join without selecting client IDs or bearer tokens.
+- 1 **confidential** registration from 2026-10-09: PC Agent-related registration name and the precise Site callback **hostname with an HTTPS URL boundary** (not merely a substring match). It has 0 consent records; this is still only a *candidate* for the masked Hosted Secret ID.
+- No Cloudflare `workers.dev` callback registrations were present during the audit.
+
+### Important global authorization invariant
+
+The current production OAuth Gateway v15 checks the signed user's allowed UUID, **but does not distinguish OAuth client IDs**. A separate minimal Site-specific MCP endpoint **alone** would not enforce least privilege: a bearer token issued to that Site might also authenticate to the unchanged older full-capability Gateway endpoint, causing a cross-endpoint privilege bypass.
+
+Accordingly, **all reachable Gateway endpoints accepting Site bearer tokens must enforce client-specific authorization** before any command is queued. PR #47 scopes the existing full Gateway rather than adding a parallel API. Merely hiding tools in the Site's UI or adding a new read-only endpoint without protecting the legacy one is not an acceptable workaround.
+
+### Remaining real-world blockers, not solved by offline tests
+
+1. Formal Site management masks the client ID Secret. Registration host/name classification is strong circumstantial attribution, **not proof of identical client IDs**. Do not log, reveal or guess the Site Secret.
+2. Explicit legacy compatibility decision: the two **`Codex` loopback clients** must **not** be bulk-listed as privileged for the Site's first Gateway-only milestone. With no positively identified privileged ChatGPT PC client, the candidate value for `KAITO_PC_AGENT_PRIVILEGED_OAUTH_CLIENT_IDS` is empty (deny by default). Their 2 unrevoked Codex consents may have previously conferred Gateway access; determine impact and secure an explicit approval before deploying a policy that removes such access.
+3. The callback/log protection gate (PR #42) and separately approved OAuth enablement must be satisfied before any live token is issued. No redirect/Secret/DB/PC mutations were made in this analysis.
+4. For the eventual protected Stage-1 real-world test, independently check client-scoped GET, `tools/list` (only `gateway_probe`), a harmless authenticated `gateway_probe`, and direct-denial of `relay_ping`, `ping` and GUI/file/task calls. Never call `relay_ping` or any PC command in the Stage-1 test.
+
+## 2026-10-24 real OAuth read-only smoke preparation (no live token used)
+
+A new scoped smoke script at `tests/oauth-site-live-smoke.mjs` performs **no network traffic by default**. Its `--live` mode is intentionally available only after a **separately approved** OAuth/Relay/Gateway configuration rollout and with a bearer token supplied securely as the process environment variable `PC_AGENT_OAUTH_ACCESS_TOKEN`. Never pass the token as a CLI argument or commit it to source, documentation, a CI variable, or a chat.
+
+When explicitly enabled, the smoke script pins the exact existing Supabase Gateway host/path, disallows bearer-forwarding HTTP redirects, does not log raw responses, and performs only:
+1. Authenticated `GET` capability metadata (must be read-only and reject write/orchestration).
+2. `tools/list` (must contain **exactly** `gateway_probe`).
+3. `tools/call` for `gateway_probe` (authenticated, scoped). No relay/device metadata or PC command.
+
+The smoke does **not** call `relay_ping`, PC `ping`, or any screenshot/GUI/task/file operation, cannot establish the full Issue #29 E2E criterion, and does not run automatically using a secret. The CI runs only `node --check tests/oauth-site-live-smoke.mjs` and `node tests/oauth-site-live-smoke.mjs` **without** `--live` or any token.
+
+**Current ChatGPT plugin read-only diagnostic attempt:** the connected Sites Plugin exposes a `relay_ping` tool but returned an error meaning connection state/execution result was not confirmed. No retry was issued; `ping` was not called. Read-only Supabase log aggregation found no matching OAuth Gateway function event during the narrow inspected window. Missing logs alone cannot prove the request did not arrive. Independent device heartbeat remained fresh. **No OAuth E2E success has been claimed.**
+
+**Release gate remains BLOCK DEPLOY:** Sites Hosted Secret client-ID equality is unverified; legacy loopback registrations must not be auto-privileged; PR #42 callback/log security conditions are unverified; no approval to enable live OAuth/Relay, deploy the Gateway, or send a Windows command has been obtained.
+
+## 2026-10-25 OAuth smoke blocker fixed in draft, not executed live
+
+Code audit reproduced a concrete defect in the previously drafted opt-in OAuth smoke script's token guard: the character class `/[\\\\s\\\\r\\n]/` unintentionally matched ordinary literal `s` / `r` characters as well as backslashes/newlines, leading to false rejection of otherwise plausible OAuth tokens. It also failed to reliably reject tabs.
+
+- Fix: move the guard to a pure `isSafeBearerToken` helper in `tests/oauth-site-smoke-validation.mjs` and use the correct `/\\s/u` whitespace pattern. Keep no-token printing and no-redirect policies unchanged.
+- Regression tests: normal JWT-looking token with `s` and `r` passes, whitespace (spaces, CR/LF, tabs, Unicode NBSP) and `Bearer ` prefixes are denied, missing/short/malformed values fail.
+- CI workflow also now runs the validation tests and triggers when only `tests/oauth-*.mjs` changes; previously the Gateway CI path filter did **not** include test-only edits.
+- **Only source tests / offline CI:** no token, live OAuth, relay, PC queue or PC command was executed. The Site secret/client-id equality, callback logging and legacy compatibility remain unverified. PR #47 is still Draft / BLOCK DEPLOY.
+
+## 2026-10-25: Stage-1 Site client narrowed to authenticated Gateway probe ONLY
+
+The user chose one bounded goal: prove a real authenticated `gateway_probe` through the current Site to Supabase Gateway before granting any Site bearer access to device-related tools. The previous draft PR #47 policy exposed `relay_ping` and `ping` to the Site OAuth client, although the Stage-1 Site saved-v13 candidate deliberately blocks MCP and all PC commands. That was unnecessary privilege for the first milestone.
+
+Source-only changes in this PR:
+- `gateway/oauth-pc-agent/client-policy.mjs`: `SITE_ALLOWED_TOOLS = ["gateway_probe"]`. A valid Site JWT authorizes **no device status, queue or PC commands**, even a ping. Other separately-approved privileged clients retain their existing allowlisted tool set. Unknown/malformed/overlapping client IDs still deny all tools. The owner UUID check stays unchanged.
+- `tests/oauth-client-policy.test.mjs`: assert `relay_ping` and PC `ping` are denied to the Site client, both in tools listing and direct tool policy.
+- `tests/oauth-site-live-smoke.mjs`: the opt-in, post-approval smoke now checks only GET read-only capabilities, the single-tool list, and authenticated `gateway_probe`. It will **never send a PC or relay ping**. `--live` and a separately approved rollout/token remain mandatory; CI runs only offline mode without bearer material.
+
+**No scope escalation or production rollout is authorized by this commit.** Stage-2 `relay_ping` and PC `ping` require a separately reviewed and approved change. The actual Site saved-v13 SDK and masked client ID are inaccessible from normal chat; no claim of successful real JWT verification or authenticated MCP calls is made. Legacy-plugin compatibility and exact client allowlists remain a deployment blocker. Production Sites v10, draft v13, Supabase Gateway v15, Cloudflare, DB, Secrets and local Agent are unchanged.
+
+## 2026-10-25: Exact registered OAuth client classification and ChatGPT-MCP client-ID separation
+
+**Read-only production database observation, no IDs/secrets/tokens read or printed:** There are exactly three `auth.oauth_clients` registrations: one confidential `Kaito PC Agent Web Bridge` with a Site callback and **zero** consents, plus two public registrations both named `Codex` with loopback callback URIs and **one unrevoked consent each**. The label and callback classify the two public clients as Codex registrations; do not silently treat them as PC Agent's old private Plugin or authorize them for PC commands. Confirm actual past usage before any breaking prod rollout.
+
+**Current Site-owned plugin release inspection:** its package contains only `.app.json` plus `.codex-plugin/plugin.json` pointing to the Site-backed MCP integration. It does not package an independent Supabase OAuth `.mcp.json` server. Separate legacy personal Plugins do point directly at the Supabase `kaito-pc-agent-oauth-readonly` URL, but their packages do not establish which registered OAuth client ID ChatGPT will use. The two `oauth-probe` Plugins point to the retired Supabase `kaito-pc-agent-oauth-probe` Edge Function, which currently serves HTTP 410.
+
+**First-party OAuth specification check:** [OpenAI Plugin authentication](https://developers.openai.com/plugins/build/auth) documents ChatGPT attaching the OAuth access token it obtained itself to MCP requests after OAuth client identification by CIMD, DCR or a predefined client. [Supabase MCP authentication](https://supabase.com/docs/guides/auth/oauth-server/mcp-authentication) documents that ChatGPT-like MCP clients obtain tokens from Supabase Auth using their own registration/consent. These mechanisms **do not prove** that a confidential Site browser OAuth client ID, an independently registered ChatGPT MCP OAuth client ID, and the token passed to a Site-backed MCP server are the same principal or share sessions. Never use a browser cookie, Site identity header, OAuth client name, or redirect hostname as a substitute for a verified token `client_id`.
+
+**Consequences for unpublished Site saved-v14 (user reports commit `e300424e1f9629aa702044decb601190629c7952`):** the reported SDK JWT verifier and authenticated `gateway_probe` handler still need their actual ChatGPT MCP OAuth **token-acquisition and transport** proven. A signature-valid local JWT fixture and mocked MCP request do not establish real ChatGPT token forwarding. The current PR #47 environment knob accepts only one exact probe-only Site client ID and no other probe-only clients. If ChatGPT registers a *different* OAuth client for MCP, the gateway will correctly deny that client. **Do not guess a future client ID or widen allowlists preemptively.** First determine the real supported MCP OAuth identity in the formal Site management environment, then decide whether the current Site client ID suffices or whether a separately scoped, explicit ChatGPT-MCP probe client is needed, without permitting any PC tool.
+
+**Stage-1 release gate remains NO-GO:** compare saved-v14 Hosted Secret to the official confidential registration internally and without disclosing either; prove how ordinary ChatGPT acquires/forwards the Supabase OAuth token and which verified `client_id` it contains; review legacy compatibility (the two known public registrations are Codex, not automatically privileged), prepare rollback, and obtain separate approval before Gateway/Site Deploy or OAuth consent. Do not change Supabase/Cloudflare/PC and do not send commands until this gate is passed.
+
+## 2026-10-25: Optional, separately verified ChatGPT MCP probe-only OAuth client IDs (source-only)
+
+**Concrete read-only production observation:** The existing protected Gateway returns HTTP **401** plus a `WWW-Authenticate` header pointing to its OAuth protected-resource metadata. `GET` of that advertised metadata confirms the exact Gateway `resource` and one expected Supabase Auth issuer. Supabase Auth's OAuth authorization-server discovery confirms issuer, PKCE `S256`, advertises a DCR `registration_endpoint`, reports `client_id_metadata_document_supported: false`, and supports token endpoint methods `client_secret_basic`, `client_secret_post`, `none`. These are **public metadata / no-token GET results**, not a successful OAuth exchange; registration availability was NOT tested and no DCR registration POST was made.
+
+[OpenAI's current MCP OAuth spec](https://developers.openai.com/plugins/build/auth) distinguishes the OpenAI host's own DCR/registered client from a Site browser's OAuth client. [OpenAI's Sites MCP docs](https://learn.chatgpt.com/docs/extend/mcp) state that Sites handles ChatGPT-to-Site-MCP sign-in, while the Site still needs separate API authorization. **Do not assume a Site's browser OAuth token is forwarded automatically or that a ChatGPT MCP OAuth client ID equals the confidential Site client ID.** Sites saved v14 `e300424e1f9629aa702044decb601190629c7952` and its SDK verification remain user-reported unpublished, without a real cross-boundary token handshake.
+
+To avoid a dangerous workaround (granting an unknown ChatGPT client full PC privileges), this draft now adds a separate *optional* `KAITO_PC_AGENT_MCP_PROBE_OAUTH_CLIENT_IDS` config key. Defaults to empty; no client is added or registered by this change. When a specifically verified ChatGPT MCP OAuth client ID is explicitly configured after a future reviewed login, `resolveClientPolicy` yields `mcp_probe` (probe-only), never `privileged`. `tools/list` exposes **only `gateway_probe`**, and `tools/call` blocks `relay_ping`, `ping`, file, GUI, task, queue, and development tools. Any malformed/duplicated/overlapping Site/probe/privileged IDs fail closed for **all** clients. The same existing verified Supabase JWT and owner UUID checks remain mandatory before this gate.
+
+**Do not populate `KAITO_PC_AGENT_MCP_PROBE_OAUTH_CLIENT_IDS` until a real signed token's client ID and its connection origin are proven through the official OAuth process.** A random/mocked JWT client ID is not evidence. DCR and OAuth consent would create/update real identity state and require a separate explicit authorization. The Site browser confidential client may suffice if the real saved v14 MCP flow is implemented through the Site token store instead; do not create a second client needlessly. This config exists only to make a distinct verified client *possible without expanding permissions*, not to assume one exists.
+
+**Deployment gate remains NO-GO**: saved-v14 Site source/Hosted Secret match, the formal Site↔ChatGPT↔Supabase token trust boundary, any consent/registration, existing Plugin compatibility/rollback, and explicit approval for new Gateway env/Deploy remain unresolved. Production Gateway v15/Sites v10/OAuth OFF/Relay OFF, DB, Secrets, Worker, registrations and the Windows PC are unchanged.
