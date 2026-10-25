@@ -21,7 +21,7 @@
 | `invalidatePending(pending)` | 既存の失敗時無効化 | 再送で再利用できない |
 | `buildExistingAuthorizationUrl(request,pending)` | 既存PKCE S256/機密clientによる認可URL生成 | `state`、`client_id`、`redirect_uri`、実verifierのSHA256 challenge一致を検証後にのみ利用 |
 | `exchangeAuthorizationCode(params)` | 既存confidential OAuth clientを使った**サーバー内のコード交換のみ** | この関数内ではトークンをDB/Cookieへ保存しない。code/secretはログ/UIに出さない |
-| `verifyAccessToken(accessToken)` | **実Supabase Auth / JWKSを使ったJWTの署名・issuer・audience・期限検証** | 単なるJWTデコードや検証済みという自己申告オブジェクトは不可。検証済みclaimsを返し、失敗時は拒否 |
+| `supabaseAuth` | Sitesサーバー内の既存Supabase Auth SDKインスタンス（`auth`オブジェクト） | **`supabaseAuth.getClaims(accessToken)`を必ず明示トークン付きで呼ぶ**。本番Supabase Auth projectに設定し、署名を検証済みの`data.claims`だけ後段へ渡す。SDKエラー／null／未構成では拒否。`getClaims()`の無引数呼出・素のJWT decodeは禁止 |
 | `storeVerifiedTokens({tokens,ownerUserId,oauthClientId})` | 既存の暗号化トークン保管 | **認証済みclaimsの照合成功後のみ呼ばれる**。対象ownerレコードへの原子的な永続化と、部分失敗時の無効化を正式ソースで実証 |
 | `ownerUserId` | 既存のサーバー専用・承認済み所有者UUID | ブラウザ送信値やメールアドレスから導出しない。検証済みJWTの`sub`と完全一致を要求 |
 | `oauthClientId` / `key` | 既存のHosted Secret（server-only） | 実値はGitHub/チャット/Browserへ表示しない。Supabase登録との非公開等値照合が必要 |
@@ -110,3 +110,14 @@ PR #42のライブ候補のみ、`verifyIdentityBinding(request)`を必須にし
 **互換性注意:** この変更はPR #42の**未公開候補APIを意図的に変更する**もので、Sites保存版12への適用済みを意味しない。Sites本体の既存Token exchange/store関数は実ソースを確認し、暗号化Storeへ書き込むタイミングを分割できなければNO-GOとする。また、保存版12で未接続の`verifyIdentityBinding`は引き続き必須で、OAuth開始前に正式本人を証明できない循環bootstrap問題はこの変更では解消しない。Browser⇔MCP本人一致、Supabase OAuth client secret一致、Worker callback登録/ログ、PR #47の本番反映も未検証。
 
 **本番:** Sites公開保存版10・未公開保存版12・環境revision 5・OAuth/Relay OFF、既存DB/Secrets/Supabase/Cloudflare/家PCは無変更。署名検証callback未実装・未デプロイ。実OAuth同意・PCコマンドは行っていない。
+
+## 2026-10-25: Supabase Auth SDKの実検証APIへ接続する未公開Adapter
+
+追加: `src/supabase-access-token-verifier.mjs`、テスト `tests/supabase-access-token-verifier.test.mjs`。候補 `createSitesV10LiveCandidate` の構成を、任意の `verifyAccessToken` callback ではなく、Site server-onlyから供給する `supabaseAuth` へ変更。内部 `createSupabaseAccessTokenVerifier(supabaseAuth)` は **`auth.getClaims(accessToken)` をトークン引数を明示して呼び**、SDKの検証が成功しない限り401で停止する。既存の `verified-oauth-exchange.mjs` の所有者UUID・`client_id`・issuer・audience・期限チェック、検証完了前の保存禁止は維持する。
+
+- **公式根拠**: [Supabase JS getClaims](https://supabase.com/docs/reference/javascript/auth-getclaims) と [auth-js型宣言](https://app.unpkg.com/%40supabase/auth-js%402.90.1/files/dist/main/GoTrueClient.d.ts)。`getClaims(jwt?)` の明示JWTは署名検証対象のOAuthアクセストークンを指定する。非対称鍵ならJWKS検証、従来の対称鍵ならAuth server照会により検証。JWT文字列の自前デコードだけでは通さない。Siteが使うSDKバージョンは正式ソースから特定・確認する必要がある。
+- **fail-closed**: SDKが未設定、`getClaims`欠如、不正トークン、SDK例外、`data.claims`欠落、`error`有りを拒否。SDKのAuthセッションや `getSession().user` へのフォールバック禁止。SDK/トークン内のエラー詳細をブラウザへ返さない。
+- **現状テスト**: 本変更のテストはSDKの `getClaims` インターフェースを模擬した**オフラインmock**であり、JWKSや実Supabase Authへのネットワーク通信・署名検証はまだ未実施。Callerから渡されるトークンをSDKへ正確に渡す点、拒否時にToken保存・Relay再請求をしない点を確認するもので、**実Siteで本人検証が成功した証拠ではない**。
+- **実Siteへ導入する条件**: 未公開保存版12の正式ソースと現存依存を確認し、その既存Supabaseクライアントが**正しいAuth URLで構成され、Secret/Tokenがserver-only**であること、コード交換と暗号化保管を分離できること、受け取ったOAuth tokenの `client_id` と本人UUIDが期待どおりであることを安全な検証経路で確認する。公式のサイト本人プリンシパル検証機構は別途未解決。Cookie/CSRF/PKCE/並行実行/PR #47の最終権限境界を飛ばさない。
+
+このPRは未公開Source候補のみ。本番Sites保存版10と未公開保存版12、本番Supabase Gateway、Worker、Secrets、DB、PCには手を加えていない。
