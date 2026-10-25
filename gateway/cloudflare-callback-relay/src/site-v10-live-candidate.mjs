@@ -68,10 +68,11 @@ export function createSitesV10LiveCandidate({
     exchangeAuthorizationCode,verifyAccessToken,storeVerifiedTokens,
     ownerUserId,oauthClientId,...(clock?{clock}:{}),
   });
-  // Must be validated by the Site's own server-side session machinery. This is
-  // not a claim from a browser header, JSON-RPC parameter or arbitrary cookie.
-  // If the Site does not provide an independent session-bound identity, stay OFF.
+  // Before OAuth, verify only the server-issued browser bootstrap session.
+  // This is NOT proof of the owner's account; that comes from verified JWT.
+  // Never derive this scope from an email, user header or JSON-RPC parameter.
   async function sessionBoundPending(request,owner) {
+    if(!opaque(owner)) throw new RelayError('authentication_required');
     const identity=await verifyIdentityBinding(request);
     if(!identity||typeof identity!=='object'||Array.isArray(identity)||
       identity.owner!==owner||!opaque(identity.principalId)||!opaque(identity.browserId))
@@ -101,7 +102,7 @@ export function createSitesV10LiveCandidate({
         if(request.headers.get('origin')!==SITE_ORIGIN) throw new RelayError('origin_rejected');
 
         const owner=await authorize(request);
-        if(typeof owner!=='string'||!owner||owner.length>200) throw new RelayError('authentication_required');
+        if(!opaque(owner)) throw new RelayError('authentication_required');
         const pending=await sessionBoundPending(request,owner);
         const now=(typeof clock==='function'?clock:Date.now)();
         // Before invoking even the Site's trusted authorize URL builder, confirm
