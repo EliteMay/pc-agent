@@ -126,6 +126,26 @@ test('wrong redirect, OAuth client ID, state and PKCE challenge fail BEFORE any 
   }
 });
 
+test('an intervening pending rewrite cannot prepare a different state or PKCE session',async()=>{
+  // The trusted URL-builder can yield to overlapping browser/session writes.
+  // The URL for the old state must never prepare a newly loaded pending state.
+  for(const mutate of [
+    p=>{p.state=value();},
+    p=>{p.verifier=value();},
+    p=>{p.browserId=value();},
+    p=>{p.csrf=value();},
+    p=>{p.mode='dummy';},
+    p=>{p.redirectUri=SITE+'/oauth/callback';},
+  ]){
+    const s=await setup({alterUrl:(url,p)=>{mutate(p);return url;}});
+    const result=await s.candidate.start(s.req('/oauth/start'));
+    assert.equal(result.status,409);
+    assert.equal(s.calls.length,0);
+    assert.equal(s.f.DB.rows('relay_pending').length,0);
+    assert.equal(s.exchanges.length,0);
+  }
+});
+
 test('dummy pending cannot be reused to start or finish a live OAuth exchange',async()=>{
   const s=await setup({pendingMode:'dummy'});
   const r=await s.candidate.start(s.req('/oauth/start'));
