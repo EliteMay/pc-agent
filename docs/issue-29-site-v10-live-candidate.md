@@ -42,3 +42,15 @@
 - 実Supabase confidential OAuth Clientの登録redirectは既存Site `/oauth/callback`のみで、Workerの`https://kaito-oauth-callback-relay-dummy.k12m45k.workers.dev/oauth/callback`は**未登録**（2026-10-25の読み取り専用集計）。登録変更は**別途明示承認**が必要。既存Site callbackを勝手に削除しない。
 - Sites`02f16ae4…`の正式なWritable sourceを再取得できたときだけ、同じ内部関数／DB Schemaを使う小差分で未公開保存し、GET/POST/owner/UIの38件以上の既存テストと候補テストを走らせる。今回は当該Siteへのsaveはしていない。
 - 本番Worker/Gateway deploy、Cloudflare/Supabase Secret変更、実OAuth/consent、PCコマンドは**今回の許可対象外**。
+
+## 2026-10-25: 認可URLとRelay prepare間の競合対策（source-only）
+
+追加監査で`createSitesV10LiveCandidate.start()`が初回`loadPending`でPKCE認可URLを生成した後、`createSitesRelayClient.prepare()`内で**同一ブラウザーpendingを再読込**することを確認。タブ競合やSession state置換があると、認可URL側の`state/verifier`とWorkerに署名・登録したpendingが**別の状態になる**可能性があった。
+
+**対策:**
+1. 本人/CSRF/TTLを検証した初回pendingの`owner/browserId/mode/state/verifier/csrf/expiresAt/redirectUri`を`Object.freeze`でスナップショット化。
+2. 認可URLのS256/redirect/client IDは初回スナップショットで検証。
+3. `prepare(request, expectedPending)`のサーバー専用引数を追加。Workerへ送る**前**に、2回目に読んだ信頼済みpendingの同じ8フィールドが初回と全て一致しなければ**拒否**。呼出側が省略する既存dummyルートの動作は変更しない。
+4. `tests/site-v10-live-candidate.test.mjs`で、URLビルダー実行中にstate・verifier・browserId・CSRF・mode・redirectUriが変更されても、Worker`/prepare`への送信数0、D1登録数0、token交換0となることを検証。
+
+**結果:** [Callback Relay CI 40152450510](https://github.com/EliteMay/pc-agent/actions/runs/40152450510)で**93件全件PASS**、[Gateway CI 40152450508](https://github.com/EliteMay/pc-agent/actions/runs/40152450508)もPASS（開発ブランチ／オフラインのみ）。これで認可URLと署名付きRelay登録の同一pending境界をテストできたが、**保存版10の実本体へはまだ組み込んでいない**。実Siteの並行ブラウザ挙動・Cookie認証・PR #47の実JWT認可は未実測。Web公開・OAuth登録・Secrets・家PCは無変更。
