@@ -295,7 +295,7 @@ test('verification and token-shape failures cannot store credentials or disclose
     assert.equal((await s.candidate.start(s.req('/oauth/start'))).status,303);
     assert.equal((await s.f.callback('code='+CANARY+'&state='+s.f.state)).status,303);
     const response=await s.candidate.postComplete(s.req('/connect/complete'));
-    assert.equal(response.status,503);
+    assert.equal(response.status,scenario.verifyFailure?401:503);
     const body=await response.text();
     assert.ok(!body.includes('private-verifier-failure'));
     assert.ok(!body.includes('invisible-token'));
