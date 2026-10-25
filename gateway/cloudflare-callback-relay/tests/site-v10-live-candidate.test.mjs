@@ -47,13 +47,14 @@ async function setup({enabled=true,pendingMode='live',alterUrl,failExchange=fals
       if(invalidTokenResponse) return {token_type:'none',access_token:'bad token'};
       return {access_token:'invisible-token',refresh_token:'invisible-refresh',token_type:'Bearer'};
     },
-    verifyAccessToken:async token=>{
+    supabaseAuth:{getClaims:async token=>{
       verifications.push(token);
       if(verifyFailure)throw Error('private-verifier-failure');
-      return {sub:OWNER_UUID,user_id:OWNER_UUID,client_id:CLIENT,role:'authenticated',
-        aud:'authenticated',iss:ISSUER,iat:Math.floor(epoch/1000)-100,
-        exp:Math.floor(epoch/1000)+3600,...verifiedOverrides};
-    },
+      return {data:{claims:{sub:OWNER_UUID,user_id:OWNER_UUID,
+        client_id:CLIENT,role:'authenticated',aud:'authenticated',iss:ISSUER,
+        iat:Math.floor(epoch/1000)-100,exp:Math.floor(epoch/1000)+3600,
+        ...verifiedOverrides}},error:null};
+    }},
     storeVerifiedTokens:async v=>{
       stored.push(v);
       if(storeFailure)throw Error('private-store-failure');
@@ -183,7 +184,7 @@ test('live candidate refuses to initialize without independent server-side ident
     consumePending:async()=>true,invalidatePending:async()=>{},
     buildExistingAuthorizationUrl:async()=>'',
     exchangeAuthorizationCode:async()=>({}),
-    verifyAccessToken:async()=>({}),storeVerifiedTokens:async()=>{},
+    supabaseAuth:{getClaims:async()=>({data:null,error:null})},storeVerifiedTokens:async()=>{},
     ownerUserId:OWNER_UUID,oauthClientId:CLIENT,
   }),e=>e.code==='setup_required');
 });
