@@ -12,6 +12,7 @@ import {
 
 const config = Object.freeze({
   siteClientId: "site-client-uuid",
+  mcpProbeClientIds: "trusted-chatgpt-mcp-client",
   privilegedClientIds: "trusted-desktop-client",
 });
 const siteClaims = Object.freeze({ client_id: config.siteClientId, sub: "owner" });
@@ -26,6 +27,18 @@ test("Sites client is restricted to only the Gateway probe in first milestone", 
     "find_paths", "search_text", "list_processes", "run_development_command",
     "task_begin", "task_status", "task_step", "task_finish", "unknown",
   ]) assert.equal(isToolAllowed("site", tool), false, tool);
+});
+
+test("A separately identified ChatGPT OAuth client only has gateway_probe", () => {
+  const policy = resolveClientPolicy({ client_id: "trusted-chatgpt-mcp-client" }, config);
+  assert.equal(policy, "mcp_probe");
+  assert.equal(isToolAllowed(policy, "gateway_probe"), true);
+  for (const tool of ["relay_ping", "ping", "capture_notepad", "notepad_gui", "read_text_file", "write_text_file", "task_step"]) {
+    assert.equal(isToolAllowed(policy, tool), false, tool);
+  }
+  assert.deepEqual(clientCapabilities(policy), {
+    readOnly: true, safeWrite: false, orchestration: false,
+  });
 });
 
 test("Only explicitly allowlisted other clients retain existing tools", () => {
@@ -76,12 +89,22 @@ test("Missing and malformed deployment config fails closed", () => {
     { siteClientId: "site-client-uuid", privilegedClientIds: "trusted-desktop-client," },
     { siteClientId: "site-client-uuid", privilegedClientIds: "trusted-desktop-client,trusted-desktop-client" },
     { siteClientId: "site-client-uuid", privilegedClientIds: "site-client-uuid" },
-  ]) assert.equal(resolveClientPolicy(siteClaims, bad), "deny");
+    { siteClientId: "site-client-uuid", mcpProbeClientIds: 0 },
+    { siteClientId: "site-client-uuid", mcpProbeClientIds: "mcp,mcp" },
+    { siteClientId: "site-client-uuid", mcpProbeClientIds: "site-client-uuid" },
+    { siteClientId: "site-client-uuid", mcpProbeClientIds: "mcp, " },
+    { siteClientId: "site-client-uuid", mcpProbeClientIds: "mcp", privilegedClientIds: "mcp" },
+  ]) {
+    for (const client_id of ["site-client-uuid", "mcp", "trusted-desktop-client"]) {
+      assert.equal(resolveClientPolicy({ client_id }, bad), "deny", JSON.stringify(bad));
+    }
+  }
 });
 
 test("Tools list is filtered, not merely advertised", () => {
   const tools = ["gateway_probe", "relay_ping", "ping", "task_step", "notepad_gui", "capture_notepad"].map((name) => ({ name }));
   assert.deepEqual(visibleTools(tools, "site").map((t) => t.name), [...SITE_ALLOWED_TOOLS]);
+  assert.deepEqual(visibleTools(tools, "mcp_probe").map((t) => t.name), [...SITE_ALLOWED_TOOLS]);
   assert.deepEqual(visibleTools(tools, "deny"), []);
   assert.equal(visibleTools(tools, "privileged"), tools);
 });
@@ -90,6 +113,7 @@ test("Gateway routes deny disallowed calls before task and queue dispatch", () =
   const source = readFileSync(new URL("../gateway/oauth-pc-agent/index.ts", import.meta.url), "utf8");
   const handler = source.slice(source.indexOf("const handler = async"));
   assert.match(handler, /resolveClientPolicy\(ctx\?\.jwtClaims,/);
+  assert.match(handler, /mcpProbeClientIds: Deno\.env\.get\("KAITO_PC_AGENT_MCP_PROBE_OAUTH_CLIENT_IDS"\)/);
   assert.match(handler, /if \(clientPolicy === "deny"\)/);
   assert.match(handler, /visibleTools\(TOOLS, clientPolicy\)/);
   assert.match(handler, /if \(!isToolAllowed\(clientPolicy, name\)\)/);
