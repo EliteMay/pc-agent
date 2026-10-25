@@ -90,10 +90,19 @@ export function createSitesV10LiveCandidate({
           !opaque(pending.state)||!opaque(pending.verifier)||
           !Number.isSafeInteger(pending.expiresAt)||pending.expiresAt<=now||pending.expiresAt>now+TTL||
           pending.redirectUri!==LIVE_CALLBACK_URL) throw new RelayError('authentication_required');
+        // Snapshot the *first* verified read. The existing auth URL builder
+        // and an overlapping browser tab must not substitute another pending
+        // record before the relay's second session-bound read.
+        const snapshot=Object.freeze({
+          owner:pending.owner,browserId:pending.browserId,mode:pending.mode,
+          state:pending.state,verifier:pending.verifier,csrf:pending.csrf,
+          expiresAt:pending.expiresAt,redirectUri:pending.redirectUri,
+        });
         const authLocation=await checkedAuthorizationUrl(
-          await buildExistingAuthorizationUrl(request,pending),pending,oauthClientId);
-        // Do not start browser OAuth if Worker registration/signing fails.
-        const prepared=await relay.prepare(request);
+          await buildExistingAuthorizationUrl(request,pending),snapshot,oauthClientId);
+        // Fail closed if pending was replaced after the authorization URL was
+        // built. Never redirect the user for a different relay registration.
+        const prepared=await relay.prepare(request,snapshot);
         if(prepared.status!==201) return prepared;
         return new Response(null,{status:303,headers:{...safeHeaders,location:authLocation}});
       } catch(error) { return safeError(error); }
