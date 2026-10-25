@@ -14,9 +14,11 @@ function checkRoute(request,action) {
   // Reject missing Origin as well as cross-origin requests for both POST routes.
   if(origin!==SITE_ORIGIN) throw new RelayError('origin_rejected');
 }
-function checkPending(pending,owner,origin,now) {
+function checkPending(pending,owner,origin,now,mode) {
   if(!plainObject(pending)||pending.owner!==owner||!opaque(pending.browserId)||!opaque(pending.state)||!opaque(pending.verifier)||
-    !Number.isSafeInteger(pending.expiresAt)||pending.expiresAt<=now||pending.expiresAt>now+TTL||pending.redirectUri!==origin+'/oauth/callback') throw new RelayError('state_unavailable');
+    !Number.isSafeInteger(pending.expiresAt)||pending.expiresAt<=now||pending.expiresAt>now+TTL||pending.redirectUri!==origin+'/oauth/callback'||
+    (mode==='live'&&pending.mode!=='live')||
+    (mode==='dummy'&&pending.mode!==undefined&&pending.mode!=='dummy')) throw new RelayError('state_unavailable');
   return pending;
 }
 function checkClaim(value,state,mode) {
@@ -54,7 +56,7 @@ export function createSitesRelayClient({origin,key,authorize,loadPending,consume
     if(typeof owner!=='string'||!owner||owner.length>200) throw new RelayError('authentication_required');
     // loadPending MUST use the validated HttpOnly browser session and owner. A
     // pending object from the browser or a caller-supplied ID is never accepted.
-    const pending=checkPending(await loadPending(request,owner),owner,origin,clock());
+    const pending=checkPending(await loadPending(request,owner),owner,origin,clock(),mode);
     return {pending,binding:await sha(`kaito-sites-binding|${owner}|${pending.browserId}|${pending.state}`)};
   }
   return {
